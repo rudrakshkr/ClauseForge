@@ -745,6 +745,20 @@ Return ONLY valid JSON:
         raw = json.loads(
             raw_content
         )
+
+        parsed = ParserResponse(**raw)
+
+        if not parsed.requirements:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "No mandatory RFP requirements were found. "
+                    "Please upload a valid RFP or procurement document."
+                ),
+            )
+
+        return parsed
+    
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=502,
