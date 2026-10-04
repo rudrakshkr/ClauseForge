@@ -56,17 +56,56 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
 
       // --- AGENTS 2 & 3: RETRIEVER AND DRAFTER ---
       setActiveNode(1);
-      setLines(prev => [...prev, "✦ [Vector Store] Retrieving company context & past wins..."]);
-      
-      setActiveNode(2);
-      setLines(prev => [...prev, "✦ [Drafting LLM] Writing initial proposal draft..."]);
+      setLines(prev => [
+        ...prev,
+        "✦ [Evidence Retriever] Searching verified company evidence..."
+      ]);
 
-      const draftRes = await fetch("http://127.0.0.1:8000/api/2-draft-proposal", {
+      const retrievalResponse = await fetch("http://127.0.0.1:8000/api/2-retrieve-context", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsedData.requirements || []),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requirements: parsedData.requirements,
+        }),
       });
+
+      if (!retrievalResponse.ok) {
+        throw new Error(`Evidence retrieval failed: ${retrievalResponse.status}`);
+      }
+
+      const retrievalData = await retrievalResponse.json();
+
+      setLines(prev => [
+        ...prev,
+        `✦ [Evidence Retriever] ✓ Found ${retrievalData.evidence?.length || 0} relevant evidence records.`
+      ]);
+
+      setActiveNode(2);
+      setLines(prev => [
+        ...prev,
+        "✦ [Drafting LLM] Writing evidence-grounded proposal..."
+      ]);
+
+      const draftRes = await fetch(
+        "http://127.0.0.1:8000/api/2-draft-proposal",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requirements: parsedData.requirements || [],
+            evidence: retrievalData.evidence || [],
+          }),
+        }
+      );
+
+      if (!draftRes.ok) {
+        throw new Error("Proposal drafting failed.");
+      }
+
       const draftData = await draftRes.json();
+      setDraftText(draftData.draft);
       
       setDraftText(draftData.draft); 
       setLines(prev => [...prev, "✦ [Drafting LLM] ✓ Draft complete. Initiating review."]);
