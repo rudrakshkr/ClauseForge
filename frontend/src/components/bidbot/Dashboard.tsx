@@ -10,7 +10,9 @@ import {
   Database,
   Download,
   FileText,
+  History,
   ShieldCheck,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { jsPDF } from "jspdf";
@@ -83,6 +85,26 @@ type ActivityLine = {
   text: string;
   tone: ActivityTone;
 };
+
+type BidHistoryItem = {
+  id: string;
+  fileName: string;
+  projectTitle: string;
+  createdAt: string;
+  updatedAt: string;
+  initialScore: number;
+  finalScore: number;
+  requirements: Requirement[];
+  evidence: EvidenceRecord[];
+  criticFlags: CriticFlag[];
+  draftText: string;
+};
+
+type DashboardView =
+  | "workspace"
+  | "history";
+
+const BID_HISTORY_KEY = "bidbot-active-bids";
 
 function getErrorMessage(
   data: unknown,
@@ -227,6 +249,27 @@ export function Dashboard({
       "proposal",
     );
 
+  const [
+    dashboardView,
+    setDashboardView,
+  ] = useState<DashboardView>(
+    "workspace",
+  );
+
+  const [
+    bidHistory,
+    setBidHistory,
+  ] = useState<BidHistoryItem[]>(
+    [],
+  );
+
+  const [
+    historyBidId,
+    setHistoryBidId,
+  ] = useState<string | null>(
+    null,
+  );
+
   const termRef =
     useRef<HTMLDivElement>(
       null,
@@ -245,6 +288,183 @@ export function Dashboard({
       behavior: "smooth",
     });
   }, [lines]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(
+        BID_HISTORY_KEY,
+      );
+
+      if (!stored) {
+        return;
+      }
+
+      const parsed: unknown =
+        JSON.parse(stored);
+
+      if (Array.isArray(parsed)) {
+        setBidHistory(
+          parsed as BidHistoryItem[],
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Failed to load bid history:",
+        error,
+      );
+    }
+  }, []);
+
+  const persistBidHistory = (
+    bids: BidHistoryItem[],
+  ) => {
+    try {
+      localStorage.setItem(
+        BID_HISTORY_KEY,
+        JSON.stringify(bids),
+      );
+    } catch (error) {
+      console.error(
+        "Failed to save bid history:",
+        error,
+      );
+    }
+  };
+
+  const saveBidToHistory = ({
+    fileName,
+    bidProjectTitle,
+    bidRequirements,
+    bidEvidence,
+    finalDraft,
+    finalCritic,
+    firstScore,
+  }: {
+    fileName: string;
+    bidProjectTitle: string;
+    bidRequirements: Requirement[];
+    bidEvidence: EvidenceRecord[];
+    finalDraft: string;
+    finalCritic: CriticResponse;
+    firstScore: number;
+  }) => {
+    if (!finalDraft) {
+      return;
+    }
+
+    const now =
+      new Date().toISOString();
+
+    const bid: BidHistoryItem = {
+      id: crypto.randomUUID(),
+      fileName,
+      projectTitle:
+        bidProjectTitle ||
+        "Untitled RFP",
+      createdAt: now,
+      updatedAt: now,
+      initialScore:
+        firstScore,
+      finalScore:
+        finalCritic.compliance_score ??
+        0,
+      requirements:
+        bidRequirements,
+      evidence:
+        bidEvidence,
+      criticFlags:
+        finalCritic.flags ??
+        [],
+      draftText:
+        finalDraft,
+    };
+
+    setBidHistory((previous) => {
+      const updated = [
+        bid,
+        ...previous,
+      ].slice(0, 25);
+
+      persistBidHistory(updated);
+
+      return updated;
+    });
+
+    setHistoryBidId(bid.id);
+  };
+
+  const openBidFromHistory = (
+    bid: BidHistoryItem,
+  ) => {
+    setRunning(false);
+    setSelectedFile(null);
+    setHistoryBidId(bid.id);
+    setDashboardView(
+      "workspace",
+    );
+    setActiveTab(
+      "proposal",
+    );
+    setScore(bid.finalScore);
+    setInitialScore(
+      bid.initialScore,
+    );
+    setDraftText(
+      bid.draftText,
+    );
+    setDisplayedDraftText(
+      bid.draftText,
+    );
+    setDraftingStage(
+      "complete",
+    );
+    setCriticFlags(
+      bid.criticFlags,
+    );
+    setEvidence(
+      bid.evidence,
+    );
+    setRequirements(
+      bid.requirements,
+    );
+    setProjectTitle(
+      bid.projectTitle,
+    );
+    setApproved(false);
+    setLines([]);
+    setActiveNode(4);
+  };
+
+  const deleteBidFromHistory = (
+    bidId: string,
+  ) => {
+    setBidHistory((previous) => {
+      const updated =
+        previous.filter(
+          (bid) => bid.id !== bidId,
+        );
+
+      persistBidHistory(updated);
+
+      return updated;
+    });
+
+    if (historyBidId === bidId) {
+      setHistoryBidId(null);
+    }
+  };
+
+  const openHistory = () => {
+    if (running) {
+      return;
+    }
+
+    setDashboardView("history");
+  };
+
+  const backToWorkspace = () => {
+    setDashboardView("workspace");
+  };
 
   const mandatoryCount =
     requirements.filter(
@@ -434,6 +654,8 @@ export function Dashboard({
       setRequirements([]);
       setProjectTitle("");
       setApproved(false);
+      setHistoryBidId(null);
+      setDashboardView("workspace");
       setActiveTab(
         "proposal",
       );
@@ -626,6 +848,9 @@ export function Dashboard({
         let finalCritic =
           firstCritic;
 
+        let finalDraft =
+          initialDraft;
+
         // ------------------------------------------------------
         // REVISION
         // ------------------------------------------------------
@@ -679,6 +904,9 @@ export function Dashboard({
           const revisedDraft =
             revisionData.draft ??
             "";
+
+          finalDraft =
+            revisedDraft;
 
           setDraftText(revisedDraft);
 
@@ -783,6 +1011,20 @@ export function Dashboard({
             "success",
           );
         }
+
+        saveBidToHistory({
+          fileName: selectedFile.name,
+          bidProjectTitle:
+            parsedData.project_title ??
+            "",
+          bidRequirements:
+            parsedRequirements,
+          bidEvidence:
+            retrievedEvidence,
+          finalDraft,
+          finalCritic,
+          firstScore,
+        });
 
         setActiveNode(4);
         setActiveTab(
@@ -1563,6 +1805,255 @@ export function Dashboard({
     );
   };
 
+  if (dashboardView === "history") {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+          <div className="flex min-w-0 items-center gap-4">
+            <button
+              type="button"
+              onClick={backToWorkspace}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Workspace
+            </button>
+
+            <span className="h-4 w-px shrink-0 bg-border" />
+
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-accent" />
+              <span className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                Bid History
+              </span>
+            </div>
+          </div>
+
+          <span className="font-mono text-xs text-muted-foreground">
+            {bidHistory.length} saved bid{
+              bidHistory.length === 1
+                ? ""
+                : "s"
+            }
+          </span>
+        </header>
+
+        <main className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="mx-auto w-full max-w-6xl px-6 py-8 lg:px-10 lg:py-10">
+            <div className="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
+                  Persistent Workspace Archive
+                </p>
+                <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+                  Saved bids
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                  Completed bids are stored locally in this browser and can be reopened without rerunning the agent swarm.
+                </p>
+              </div>
+            </div>
+
+            {bidHistory.length === 0 ? (
+              <div className="flex min-h-[420px] items-center justify-center rounded-xl border border-dashed border-border">
+                <div className="max-w-sm text-center">
+                  <History className="mx-auto h-7 w-7 text-muted-foreground" />
+                  <h2 className="mt-4 text-base font-semibold">
+                    No saved bids yet
+                  </h2>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    Run an RFP through the complete swarm and the finished bid will appear here automatically.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={backToWorkspace}
+                    className="mt-5 inline-flex items-center gap-2 rounded bg-primary px-4 py-2.5 text-xs font-medium text-primary-foreground transition hover:opacity-90"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    Back to Workspace
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {bidHistory.map((bid, index) => {
+                  const reviewCount =
+                    bid.criticFlags.length;
+                  const scoreImprovement =
+                    bid.finalScore -
+                    bid.initialScore;
+
+                  return (
+                    <motion.article
+                      key={bid.id}
+                      initial={{
+                        opacity: 0,
+                        y: 8,
+                      }}
+                      animate={{
+                        opacity: 1,
+                        y: 0,
+                      }}
+                      transition={{
+                        ...spring,
+                        delay: index * 0.03,
+                      }}
+                      className="overflow-hidden rounded-xl border border-border bg-card"
+                    >
+                      <div className="border-b border-border bg-background px-6 py-5">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded border border-border px-2 py-1 font-mono text-[9px] uppercase tracking-widest text-accent">
+                                Bid {index + 1}
+                              </span>
+                              <span
+                                className={[
+                                  "rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-widest",
+                                  reviewCount > 0
+                                    ? "border-yellow-400/20 text-yellow-400"
+                                    : "border-accent/20 text-accent",
+                                ].join(" ")}
+                              >
+                                {reviewCount > 0
+                                  ? `${reviewCount} review${reviewCount === 1 ? "" : "s"}`
+                                  : "Ready"}
+                              </span>
+                            </div>
+
+                            <h2 className="mt-3 truncate text-xl font-semibold tracking-tight">
+                              {bid.projectTitle}
+                            </h2>
+
+                            <p className="mt-1 truncate text-xs text-muted-foreground">
+                              {bid.fileName}
+                            </p>
+                          </div>
+
+                          <div className="shrink-0 rounded-lg border border-border bg-card px-4 py-3 lg:min-w-[120px] lg:text-right">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-muted-foreground">
+                              Final Score
+                            </p>
+                            <p className="mt-1 text-2xl font-semibold text-accent">
+                              {bid.finalScore}
+                              <span className="text-sm text-muted-foreground">
+                                /100
+                              </span>
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-px border-b border-border bg-border sm:grid-cols-2 lg:grid-cols-5">
+                        <div className="bg-card p-4">
+                          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                            Initial Score
+                          </p>
+                          <p className="mt-2 text-lg font-semibold">
+                            {bid.initialScore}/100
+                          </p>
+                        </div>
+
+                        <div className="bg-card p-4">
+                          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                            Revision Impact
+                          </p>
+                          <p className={[
+                            "mt-2 text-lg font-semibold",
+                            scoreImprovement > 0
+                              ? "text-accent"
+                              : "text-foreground",
+                          ].join(" ")}>
+                            {scoreImprovement > 0 ? "+" : ""}
+                            {scoreImprovement}
+                          </p>
+                        </div>
+
+                        <div className="bg-card p-4">
+                          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                            Clauses
+                          </p>
+                          <p className="mt-2 text-lg font-semibold">
+                            {bid.requirements.length}
+                          </p>
+                        </div>
+
+                        <div className="bg-card p-4">
+                          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                            Evidence
+                          </p>
+                          <p className="mt-2 text-lg font-semibold">
+                            {bid.evidence.length}
+                          </p>
+                        </div>
+
+                        <div className="bg-card p-4">
+                          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                            Saved
+                          </p>
+                          <p className="mt-2 text-sm font-medium">
+                            {new Date(
+                              bid.updatedAt,
+                            ).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          {reviewCount > 0 ? (
+                            <p className="truncate text-xs text-yellow-400">
+                              Outstanding: {""}
+                              {bid.criticFlags[0]?.clause_id ?? "Clause"}
+                              {" — "}
+                              {bid.criticFlags[0]?.issue ?? "Human review required."}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-accent">
+                              No outstanding mandatory critic findings.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              deleteBidFromHistory(
+                                bid.id,
+                              )
+                            }
+                            className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[10px] font-medium text-muted-foreground transition hover:border-red-400/30 hover:text-red-400"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openBidFromHistory(
+                                bid,
+                              )
+                            }
+                            className="inline-flex items-center gap-2 rounded bg-primary px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary-foreground transition hover:opacity-90"
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            Open Workspace
+                          </button>
+                        </div>
+                      </div>
+                    </motion.article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       {/* ======================================================
@@ -1769,7 +2260,18 @@ export function Dashboard({
           </nav>
         </div>
 
-        <div className="ml-4 flex shrink-0 items-center gap-4">
+        <div className="ml-4 flex shrink-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={openHistory}
+            disabled={running}
+            className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <History className="h-3.5 w-3.5" />
+            History
+          </button>
+
+          <div className="flex shrink-0 items-center gap-4">
           {initialScore !==
             null && (
             <div className="hidden font-mono text-xs text-muted-foreground sm:block">
@@ -1801,6 +2303,7 @@ export function Dashboard({
               {score}
             </span>
             /100
+          </div>
           </div>
         </div>
       </header>
