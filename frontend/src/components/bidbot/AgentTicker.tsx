@@ -1,4 +1,4 @@
-const activity = "✦ [Parser Node] Ingesting GovTech_RFP.pdf ... ✦ [Vector Store] 12,480 chunks indexed ...";
+const activity = "✦ [Parser Node] Ingesting GovTech_RFP.pdf ... ✦ ✦ [Evidence KB] 10 verified records available ...";
 
 export function AgentTicker() {
   return (

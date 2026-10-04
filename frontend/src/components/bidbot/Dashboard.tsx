@@ -223,9 +223,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
             </div>
           )}
           <div className="flex flex-col gap-2">
-            <span className="text-xs text-muted-foreground">Knowledge Base (Vector DB)</span>
+            <span className="text-xs text-muted-foreground">Evidence Knowledge Base</span>
             <select className="h-9 rounded border border-input bg-card px-2 text-sm text-foreground outline-none focus:border-accent">
-              <option>kb://past-proposals (1,204 docs)</option>
+              <option>local://verified-evidence (10 records)</option>
               <option>kb://case-studies (318 docs)</option>
               <option>kb://certifications (42 docs)</option>
             </select>
