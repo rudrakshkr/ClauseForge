@@ -78,7 +78,10 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       const criticRes = await fetch("http://127.0.0.1:8000/api/3-critic-review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draftData),
+        body: JSON.stringify({
+          requirements: parsedData.requirements || [],
+          draft: draftData.draft,
+        }),
       });
       const criticData = await criticRes.json();
       

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "cert-iso-27001",
+    "type": "certification",
+    "title": "ISO 27001 Certification",
+    "content": "Northwind Digital holds a valid ISO 27001 certification, Certificate #492-A. The certification covers the company's information security management system and security controls used across delivery engagements.",
+    "tags": ["ISO 27001", "security", "certification", "information security", "compliance"]
+  },
+  {
+    "id": "project-nhs-migration",
+    "type": "case_study",
+    "title": "UK NHS Data Migration — 2023",
+    "content": "Northwind Digital delivered a large-scale UK NHS data migration project in 2023 involving sensitive patient and citizen data. The project was completed under budget and included secure staging, data validation, migration waves, reconciliation, and controlled cutover.",
+    "tags": ["NHS", "data migration", "citizen data", "patient data", "healthcare", "secure migration"]
+  },
+  {
+    "id": "experience-govtech",
+    "type": "company_profile",
+    "title": "15 Years of GovTech Experience",
+    "content": "Northwind Digital has 15 years of experience delivering government and public-sector technology projects involving citizen-data workloads.",
+    "tags": ["GovTech", "government", "public sector", "15 years", "citizen data"]
+  },
+  {
+    "id": "cloud-aws-govcloud",
+    "type": "technical_capability",
+    "title": "AWS GovCloud Delivery",
+    "content": "Northwind Digital has experience delivering cloud-native solutions using AWS GovCloud for government and regulated workloads.",
+    "tags": ["AWS", "AWS GovCloud", "cloud", "government", "regulated workloads"]
+  },
+  {
+    "id": "tech-stack",
+    "type": "technical_capability",
+    "title": "Core Engineering Stack",
+    "content": "Northwind Digital's established delivery technologies include React for user-facing interfaces and Python for data processing, migration orchestration, and service-layer development.",
+    "tags": ["React", "Python", "technology", "data processing", "migration orchestration"]
+  },
+  {
+    "id": "security-architecture",
+    "type": "security_capability",
+    "title": "Data Security Architecture",
+    "content": "Northwind Digital uses layered security controls including private network segments, TLS encryption in transit, AES-256 encryption at rest, least-privilege IAM, MFA, role-based access control, audit logging, PII tokenization or pseudonymization, and managed secrets.",
+    "tags": ["security", "encryption", "IAM", "MFA", "RBAC", "PII", "audit logging"]
+  },
+  {
+    "id": "pii-migration",
+    "type": "security_capability",
+    "title": "PII Protection During Migration",
+    "content": "For migration workloads, Northwind Digital applies data minimization, pseudonymization or tokenization in staging, encrypted transfer channels, restricted access, masked or synthetic test data, and verification before source-data destruction.",
+    "tags": ["PII", "privacy", "data migration", "tokenization", "pseudonymization", "security"]
+  },
+  {
+    "id": "dr-bcp",
+    "type": "case_study",
+    "title": "Disaster Recovery and Business Continuity Capability",
+    "content": "Northwind Digital designs resilient application and data tiers with automated encrypted backups, documented restoration procedures, failover exercises, escalation runbooks, and continuity planning. Proposed recovery objectives can include RPO of 1 hour and RTO of 4 hours, subject to client confirmation.",
+    "tags": ["disaster recovery", "business continuity", "DR", "BCP", "RPO", "RTO", "resilience"]
+  },
+  {
+    "id": "migration-methodology",
+    "type": "delivery_method",
+    "title": "Wave-Based Migration Methodology",
+    "content": "Northwind Digital uses phased migration with discovery and data profiling, secure staging, iterative migration waves, per-wave reconciliation, testing, cutover rehearsals, rollback points, and formal sign-off.",
+    "tags": ["migration", "delivery", "reconciliation", "testing", "cutover", "rollback"]
+  },
+  {
+    "id": "citizen-portal",
+    "type": "case_study",
+    "title": "Citizen Services Portal",
+    "content": "Northwind Digital delivered a public-sector web portal using React and Python, with role-based access controls, audit logging, encrypted data handling, and workflows designed around citizen-facing services.",
+    "tags": ["React", "Python", "citizen services", "portal", "RBAC", "audit logging"]
+  }
+]

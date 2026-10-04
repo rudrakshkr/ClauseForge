@@ -6,6 +6,7 @@ from pypdf import PdfReader
 import io
 import os
 import json
+import re
 
 app = FastAPI()
 
@@ -57,7 +58,6 @@ class CriticRequest(BaseModel):
 
 
 # Temporary company context.
-# We will replace this in Step 2 with the real evidence retriever.
 COMPANY_CONTEXT = """
 Northwind Digital Company Profile:
 - ISO 27001 Certified (Cert #492-A).
@@ -66,6 +66,133 @@ Northwind Digital Company Profile:
 - Past Success: UK NHS Data Migration (2023) completed under budget.
 """
 
+# -----------------------------
+# Local evidence retrieval
+# -----------------------------
+
+KNOWLEDGE_BASE_PATH = "knowledge_base/evidence.json"
+
+
+def load_evidence() -> list[dict]:
+    try:
+        with open(KNOWLEDGE_BASE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, list):
+            raise ValueError("Knowledge base must contain a JSON array.")
+
+        return data
+
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"Knowledge base not found: {KNOWLEDGE_BASE_PATH}"
+        )
+
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Knowledge base contains invalid JSON: {exc}"
+        )
+
+
+def tokenize(text: str) -> set[str]:
+    """
+    Lightweight deterministic tokenizer.
+    Removes punctuation and common stop words.
+    """
+    stop_words = {
+        "the", "a", "an", "and", "or", "of", "to", "in",
+        "for", "with", "on", "at", "by", "is", "are",
+        "be", "must", "this", "that", "from"
+    }
+
+    words = re.findall(r"[a-z0-9]+", text.lower())
+
+    return {
+        word
+        for word in words
+        if word not in stop_words and len(word) > 2
+    }
+
+
+def score_evidence(
+    requirement: RFPRequirement,
+    evidence: dict,
+) -> float:
+    """
+    Deterministic relevance score based on token overlap.
+
+    The requirement text is compared against:
+    - title
+    - content
+    - tags
+
+    Tags receive extra weight because they are explicitly
+    curated metadata about the evidence.
+    """
+    requirement_tokens = tokenize(requirement.description)
+
+    title_tokens = tokenize(evidence.get("title", ""))
+    content_tokens = tokenize(evidence.get("content", ""))
+    tag_tokens = tokenize(" ".join(evidence.get("tags", [])))
+
+    if not requirement_tokens:
+        return 0.0
+
+    title_matches = len(requirement_tokens & title_tokens)
+    content_matches = len(requirement_tokens & content_tokens)
+    tag_matches = len(requirement_tokens & tag_tokens)
+
+    weighted_matches = (
+        (title_matches * 3)
+        + (content_matches * 1)
+        + (tag_matches * 2)
+    )
+
+    max_possible = len(requirement_tokens) * 6
+
+    return round(
+        min(weighted_matches / max_possible, 1.0),
+        3,
+    )
+
+
+def retrieve_evidence(
+    requirements: list[RFPRequirement],
+    max_results_per_requirement: int = 3,
+    threshold: float = 0.08,
+) -> list[dict]:
+    evidence_records = load_evidence()
+
+    results = []
+
+    for requirement in requirements:
+        ranked = []
+
+        for evidence in evidence_records:
+            score = score_evidence(requirement, evidence)
+
+            if score >= threshold:
+                ranked.append(
+                    {
+                        "requirement_id": requirement.clause_id,
+                        "source_id": evidence["id"],
+                        "source_type": evidence["type"],
+                        "title": evidence["title"],
+                        "content": evidence["content"],
+                        "relevance_score": score,
+                    }
+                )
+
+        ranked.sort(
+            key=lambda item: item["relevance_score"],
+            reverse=True,
+        )
+
+        results.extend(
+            ranked[:max_results_per_requirement]
+        )
+
+    return results
 
 # -----------------------------
 # 1. Parse RFP
