@@ -51,6 +51,18 @@ class CriticResponse(BaseModel):
     flags: list[CriticFlag]
     approved: bool
 
+class EvidenceItem(BaseModel):
+    requirement_id: str
+    source_id: str
+    source_type: str
+    title: str
+    content: str
+    relevance_score: float
+
+
+class DraftRequest(BaseModel):
+    requirements: list[RFPRequirement]
+    evidence: list[EvidenceItem]
 
 class CriticRequest(BaseModel):
     requirements: list[RFPRequirement]
@@ -194,6 +206,18 @@ def retrieve_evidence(
 
     return results
 
+class RetrieveRequest(BaseModel):
+    requirements: list[RFPRequirement]
+
+
+@app.post("/api/2-retrieve-context")
+async def retrieve_context(request: RetrieveRequest):
+    evidence = retrieve_evidence(request.requirements)
+
+    return {
+        "evidence": evidence
+    }
+
 # -----------------------------
 # 1. Parse RFP
 # -----------------------------
@@ -266,12 +290,25 @@ Return ONLY valid JSON:
 # -----------------------------
 
 @app.post("/api/2-draft-proposal")
-async def draft_proposal(requirements: list[RFPRequirement]):
-    req_text = "\n".join(
+async def draft_proposal(request: DraftRequest):
+    requirements_text = "\n".join(
         [
             f"{r.clause_id}: {r.description} "
             f"(mandatory={r.is_mandatory})"
-            for r in requirements
+            for r in request.requirements
+        ]
+    )
+
+    evidence_text = "\n".join(
+        [
+            (
+                f"[Evidence for {e.requirement_id}]\n"
+                f"Source: {e.title}\n"
+                f"Type: {e.source_type}\n"
+                f"Relevance: {e.relevance_score}\n"
+                f"Content: {e.content}"
+            )
+            for e in request.evidence
         ]
     )
 
@@ -279,17 +316,21 @@ async def draft_proposal(requirements: list[RFPRequirement]):
 Write a professional proposal addressing the following RFP requirements.
 
 RFP REQUIREMENTS:
-{req_text}
+{requirements_text}
 
-COMPANY CONTEXT:
-{COMPANY_CONTEXT}
+VERIFIED COMPANY EVIDENCE:
+{evidence_text}
 
-Important:
-- Do not invent certifications.
-- Do not invent previous projects.
-- Do not invent metrics.
-- Use only the supplied company context for company-specific claims.
-- Address the requirements explicitly.
+STRICT RULES:
+- Use ONLY the supplied company evidence for company-specific claims.
+- Never invent certifications, clients, projects, metrics, technologies,
+  capabilities, dates, or outcomes.
+- Do not treat an RFP requirement itself as evidence.
+- Address every mandatory requirement explicitly.
+- Where sufficient evidence does not exist, state that evidence is
+  unavailable instead of fabricating a claim.
+- Preserve the RFP clause IDs when mapping requirements in the proposal.
+- Prefer precise, evidence-backed statements over generic marketing language.
 """
 
     response = client.chat.completions.create(
@@ -297,11 +338,11 @@ Important:
         messages=[
             {
                 "role": "system",
-                "content": "You are an expert grant writer.",
+                "content": "You are an expert government proposal writer."
             },
             {
                 "role": "user",
-                "content": prompt,
+                "content": prompt
             },
         ],
     )
