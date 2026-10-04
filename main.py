@@ -1,14 +1,21 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 from pypdf import PdfReader
+
 import io
 import os
 import json
 import re
 
+
 app = FastAPI()
+
+
+# ============================================================
+# CORS
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,15 +24,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ============================================================
+# LLM CLIENT
+# ============================================================
+
 client = OpenAI(
     api_key=os.getenv("SELORA_API_KEY"),
     base_url="https://api.selora.lol/v1",
 )
 
 
-# -----------------------------
-# Data models
-# -----------------------------
+# ============================================================
+# UPLOAD LIMITS
+# ============================================================
+
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_PAGES = 300
+
+
+# ============================================================
+# MODELS
+# ============================================================
 
 class RFPRequirement(BaseModel):
     clause_id: str
@@ -51,6 +71,12 @@ class CriticResponse(BaseModel):
     flags: list[CriticFlag]
     approved: bool
 
+
+class CriticRequest(BaseModel):
+    requirements: list[RFPRequirement]
+    draft: str
+
+
 class EvidenceItem(BaseModel):
     requirement_id: str
     source_id: str
@@ -63,35 +89,34 @@ class EvidenceItem(BaseModel):
 class DraftRequest(BaseModel):
     requirements: list[RFPRequirement]
     evidence: list[EvidenceItem]
+    previous_draft: str | None = None
+    critic_feedback: list[CriticFlag] | None = None
 
-class CriticRequest(BaseModel):
+
+class RetrieveRequest(BaseModel):
     requirements: list[RFPRequirement]
-    draft: str
 
 
-# Temporary company context.
-COMPANY_CONTEXT = """
-Northwind Digital Company Profile:
-- ISO 27001 Certified (Cert #492-A).
-- 15 years experience in GovTech and citizen-data workloads.
-- Core technologies: React, Python, AWS GovCloud.
-- Past Success: UK NHS Data Migration (2023) completed under budget.
-"""
-
-# -----------------------------
-# Local evidence retrieval
-# -----------------------------
+# ============================================================
+# KNOWLEDGE BASE
+# ============================================================
 
 KNOWLEDGE_BASE_PATH = "knowledge_base/evidence.json"
 
 
 def load_evidence() -> list[dict]:
     try:
-        with open(KNOWLEDGE_BASE_PATH, "r", encoding="utf-8") as f:
+        with open(
+            KNOWLEDGE_BASE_PATH,
+            "r",
+            encoding="utf-8",
+        ) as f:
             data = json.load(f)
 
         if not isinstance(data, list):
-            raise ValueError("Knowledge base must contain a JSON array.")
+            raise ValueError(
+                "Knowledge base must contain a JSON array."
+            )
 
         return data
 
@@ -107,17 +132,33 @@ def load_evidence() -> list[dict]:
 
 
 def tokenize(text: str) -> set[str]:
-    """
-    Lightweight deterministic tokenizer.
-    Removes punctuation and common stop words.
-    """
     stop_words = {
-        "the", "a", "an", "and", "or", "of", "to", "in",
-        "for", "with", "on", "at", "by", "is", "are",
-        "be", "must", "this", "that", "from"
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "to",
+        "in",
+        "for",
+        "with",
+        "on",
+        "at",
+        "by",
+        "is",
+        "are",
+        "be",
+        "must",
+        "this",
+        "that",
+        "from",
     }
 
-    words = re.findall(r"[a-z0-9]+", text.lower())
+    words = re.findall(
+        r"[a-z0-9]+",
+        text.lower(),
+    )
 
     return {
         word
@@ -130,47 +171,61 @@ def score_evidence(
     requirement: RFPRequirement,
     evidence: dict,
 ) -> float:
-    """
-    Deterministic relevance score based on token overlap.
+    requirement_tokens = tokenize(
+        requirement.description
+    )
 
-    The requirement text is compared against:
-    - title
-    - content
-    - tags
+    title_tokens = tokenize(
+        evidence.get("title", "")
+    )
 
-    Tags receive extra weight because they are explicitly
-    curated metadata about the evidence.
-    """
-    requirement_tokens = tokenize(requirement.description)
+    content_tokens = tokenize(
+        evidence.get("content", "")
+    )
 
-    title_tokens = tokenize(evidence.get("title", ""))
-    content_tokens = tokenize(evidence.get("content", ""))
-    tag_tokens = tokenize(" ".join(evidence.get("tags", [])))
+    tag_tokens = tokenize(
+        " ".join(
+            evidence.get("tags", [])
+        )
+    )
 
     if not requirement_tokens:
         return 0.0
 
-    title_matches = len(requirement_tokens & title_tokens)
-    content_matches = len(requirement_tokens & content_tokens)
-    tag_matches = len(requirement_tokens & tag_tokens)
-
-    weighted_matches = (
-        (title_matches * 3)
-        + (content_matches * 1)
-        + (tag_matches * 2)
+    title_matches = len(
+        requirement_tokens & title_tokens
     )
 
-    max_possible = len(requirement_tokens) * 6
+    content_matches = len(
+        requirement_tokens & content_tokens
+    )
+
+    tag_matches = len(
+        requirement_tokens & tag_tokens
+    )
+
+    weighted_matches = (
+        title_matches * 3
+        + content_matches
+        + tag_matches * 2
+    )
+
+    max_possible = (
+        len(requirement_tokens) * 6
+    )
 
     return round(
-        min(weighted_matches / max_possible, 1.0),
+        min(
+            weighted_matches / max_possible,
+            1.0,
+        ),
         3,
     )
 
 
 def retrieve_evidence(
     requirements: list[RFPRequirement],
-    max_results_per_requirement: int = 3,
+    max_results_per_requirement: int = 2,
     threshold: float = 0.08,
 ) -> list[dict]:
     evidence_records = load_evidence()
@@ -181,12 +236,17 @@ def retrieve_evidence(
         ranked = []
 
         for evidence in evidence_records:
-            score = score_evidence(requirement, evidence)
+            score = score_evidence(
+                requirement,
+                evidence,
+            )
 
             if score >= threshold:
                 ranked.append(
                     {
-                        "requirement_id": requirement.clause_id,
+                        "requirement_id": (
+                            requirement.clause_id
+                        ),
                         "source_id": evidence["id"],
                         "source_type": evidence["type"],
                         "title": evidence["title"],
@@ -196,56 +256,166 @@ def retrieve_evidence(
                 )
 
         ranked.sort(
-            key=lambda item: item["relevance_score"],
+            key=lambda item: item[
+                "relevance_score"
+            ],
             reverse=True,
         )
 
         results.extend(
-            ranked[:max_results_per_requirement]
+            ranked[
+                :max_results_per_requirement
+            ]
         )
 
     return results
 
-class RetrieveRequest(BaseModel):
-    requirements: list[RFPRequirement]
+def build_parser_context(
+    page_texts: list[str],
+    max_chars: int = 30000,
+) -> str:
+    """
+    Scan the entire PDF locally, but send only likely
+    requirement-bearing pages/sections to the LLM.
+    """
+
+    requirement_terms = (
+        "mandatory",
+        "must",
+        "shall",
+        "required",
+        "requirement",
+        "compliance",
+        "qualification",
+        "minimum",
+        "eligibility",
+        "section l",
+        "section m",
+    )
+
+    selected_pages: list[str] = []
+
+    # Always preserve the first two pages because they often
+    # contain the title, scope, instructions, and contents.
+    for page_index, page_text in enumerate(page_texts):
+        normalized = page_text.lower()
+
+        if (
+            page_index < 2
+            or any(term in normalized for term in requirement_terms)
+        ):
+            selected_pages.append(
+                f"[PAGE {page_index + 1}]\n{page_text}"
+            )
+
+    context = "\n\n".join(selected_pages)
+
+    # Hard cap to prevent unexpectedly huge prompts.
+    if len(context) > max_chars:
+        context = context[:max_chars]
+
+    return context
 
 
-@app.post("/api/2-retrieve-context")
-async def retrieve_context(request: RetrieveRequest):
-    evidence = retrieve_evidence(request.requirements)
+# ============================================================
+# AGENT 1 — RFP PARSER
+# ============================================================
 
-    return {
-        "evidence": evidence
-    }
+@app.post(
+    "/api/1-parse-rfp",
+    response_model=ParserResponse,
+)
+async def parse_rfp(
+    file: UploadFile = File(...),
+):
+    # --------------------------------------------------------
+    # Read uploaded PDF
+    # --------------------------------------------------------
 
-# -----------------------------
-# 1. Parse RFP
-# -----------------------------
-
-@app.post("/api/1-parse-rfp", response_model=ParserResponse)
-async def parse_rfp(file: UploadFile = File(...)):
     content = await file.read()
 
-    pdf = PdfReader(io.BytesIO(content))
+    # --------------------------------------------------------
+    # File size protection
+    # --------------------------------------------------------
 
-    text = ""
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "RFP file is too large. "
+                "Maximum size is 10 MB."
+            ),
+        )
 
-    # Keep the current 5-page limit for now.
-    # We can improve this later.
-    for page in pdf.pages[:5]:
-        text += (page.extract_text() or "") + "\n"
+    # --------------------------------------------------------
+    # Parse PDF
+    # --------------------------------------------------------
+
+    try:
+        pdf = PdfReader(
+            io.BytesIO(content)
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid PDF file: {exc}",
+        )
+
+    # --------------------------------------------------------
+    # Page limit protection
+    # --------------------------------------------------------
+
+    if len(pdf.pages) > MAX_PAGES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"RFP has too many pages. "
+                f"Maximum is {MAX_PAGES} pages."
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Extract ALL pages
+    # --------------------------------------------------------
+
+    page_texts: list[str] = []
+
+    for page in pdf.pages:
+        page_text = page.extract_text() or ""
+        page_texts.append(page_text)
+
+    text = build_parser_context(page_texts)
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No readable text was found "
+                "in the PDF."
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Parse requirements with cheaper model
+    # --------------------------------------------------------
 
     prompt = f"""
-Extract the mandatory compliance rules from the following RFP document text.
+Extract the mandatory compliance rules from
+the following RFP document text.
 
 For every requirement, provide:
 - clause_id
 - description
 - whether it is mandatory
 
-Do not invent requirements.
+Rules:
+- Extract requirements from the source text only.
+- Do not invent requirements.
+- Preserve clause IDs exactly when present.
+- Include every mandatory requirement you can identify.
+- Ignore general marketing or background information.
 
-RFP TEXT:
+RFP RELEVANT EXCERPTS:
 {text}
 
 Return ONLY valid JSON:
@@ -263,12 +433,13 @@ Return ONLY valid JSON:
 """
 
     response = client.chat.completions.create(
-        model="gpt-6-astra",
+        model="gpt-5.6-luna",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are an expert RFP compliance parser. "
+                    "You are an expert RFP "
+                    "compliance parser. "
                     "Return valid JSON only."
                 ),
             },
@@ -277,43 +448,129 @@ Return ONLY valid JSON:
                 "content": prompt,
             },
         ],
-        response_format={"type": "json_object"},
+        response_format={
+            "type": "json_object"
+        },
     )
 
-    raw = json.loads(response.choices[0].message.content)
+    raw_content = (
+        response.choices[0]
+        .message
+        .content
+    )
+
+    if not raw_content:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Parser model returned "
+                "an empty response."
+            ),
+        )
+
+    try:
+        raw = json.loads(
+            raw_content
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Parser returned invalid JSON: {exc}"
+            ),
+        )
 
     return ParserResponse(**raw)
 
 
-# -----------------------------
-# 2. Draft proposal
-# -----------------------------
+# ============================================================
+# AGENT 2 — EVIDENCE RETRIEVER
+# ============================================================
 
-@app.post("/api/2-draft-proposal")
-async def draft_proposal(request: DraftRequest):
+@app.post(
+    "/api/2-retrieve-context"
+)
+async def retrieve_context(
+    request: RetrieveRequest,
+):
+    evidence = retrieve_evidence(
+        request.requirements
+    )
+
+    return {
+        "evidence": evidence
+    }
+
+
+# ============================================================
+# AGENT 3 — PROPOSAL DRAFTER
+# ============================================================
+
+@app.post(
+    "/api/2-draft-proposal"
+)
+async def draft_proposal(
+    request: DraftRequest,
+):
     requirements_text = "\n".join(
         [
-            f"{r.clause_id}: {r.description} "
-            f"(mandatory={r.is_mandatory})"
-            for r in request.requirements
+            (
+                f"{requirement.clause_id}: "
+                f"{requirement.description} "
+                f"(mandatory="
+                f"{requirement.is_mandatory})"
+            )
+            for requirement in request.requirements
         ]
     )
 
     evidence_text = "\n".join(
         [
             (
-                f"[Evidence for {e.requirement_id}]\n"
-                f"Source: {e.title}\n"
-                f"Type: {e.source_type}\n"
-                f"Relevance: {e.relevance_score}\n"
-                f"Content: {e.content}"
+                f"[Evidence for "
+                f"{item.requirement_id}]\n"
+                f"Source: {item.title}\n"
+                f"Type: {item.source_type}\n"
+                f"Relevance: "
+                f"{item.relevance_score}\n"
+                f"Content: {item.content}"
             )
-            for e in request.evidence
+            for item in request.evidence
         ]
     )
 
+    revision_context = ""
+
+    if request.previous_draft and request.critic_feedback:
+        feedback_text = "\n".join(
+            [
+                (
+                    f"Clause {flag.clause_id} "
+                    f"({flag.severity}): "
+                    f"{flag.issue}\n"
+                    f"Recommendation: {flag.suggestion}"
+                )
+                for flag in request.critic_feedback
+            ]
+        )
+
+        revision_context = f"""
+    PREVIOUS DRAFT:
+    {request.previous_draft}
+
+    CRITIC FEEDBACK:
+    {feedback_text}
+
+    REVISION INSTRUCTIONS:
+    - Revise the previous draft to address every supplied critic issue.
+    - Preserve correct content and verified evidence.
+    - Do not introduce unsupported claims while fixing the issues.
+    - Return the complete revised proposal, not a patch or explanation.
+    """
+
     prompt = f"""
-Write a professional proposal addressing the following RFP requirements.
+Write a professional proposal addressing
+the following RFP requirements.
 
 RFP REQUIREMENTS:
 {requirements_text}
@@ -322,66 +579,110 @@ VERIFIED COMPANY EVIDENCE:
 {evidence_text}
 
 STRICT RULES:
-- Use ONLY the supplied company evidence for company-specific claims.
-- Never invent certifications, clients, projects, metrics, technologies,
+- Use ONLY the supplied company evidence
+  for company-specific claims.
+- Keep the proposal concise: target 1200-1800 words.
+- Do not repeat the same evidence across multiple sections unless necessary.
+- Never invent certifications, clients,
+  projects, metrics, technologies,
   capabilities, dates, or outcomes.
-- Do not treat an RFP requirement itself as evidence.
-- Address every mandatory requirement explicitly.
-- Where sufficient evidence does not exist, state that evidence is
-  unavailable instead of fabricating a claim.
-- Preserve the RFP clause IDs when mapping requirements in the proposal.
-- Prefer precise, evidence-backed statements over generic marketing language.
+- Do not treat an RFP requirement itself
+  as evidence.
+- Address every mandatory requirement
+  explicitly.
+- Where sufficient evidence does not exist,
+  state that evidence is unavailable
+  instead of fabricating a claim.
+- Preserve the RFP clause IDs when
+  mapping requirements in the proposal.
+- Prefer precise, evidence-backed statements
+  over generic marketing language.
+- Clearly disclose evidence gaps.
+{revision_context}
 """
 
     response = client.chat.completions.create(
-        model="gpt-6-astra",
+        model="gpt-5.6-luna",
         messages=[
             {
                 "role": "system",
-                "content": "You are an expert government proposal writer."
+                "content": (
+                    "You are an expert government "
+                    "proposal writer."
+                ),
             },
             {
                 "role": "user",
-                "content": prompt
+                "content": prompt,
             },
         ],
     )
 
+    draft = (
+        response.choices[0]
+        .message
+        .content
+    )
+
+    if not draft:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Drafting model returned "
+                "an empty response."
+            ),
+        )
+
     return {
-        "draft": response.choices[0].message.content
+        "draft": draft
     }
 
 
-# -----------------------------
-# 3. Clause-level compliance critic
-# -----------------------------
+# ============================================================
+# AGENT 4 — ADVERSARIAL CRITIC
+# ============================================================
 
-@app.post("/api/3-critic-review", response_model=CriticResponse)
-async def critic_review(request: CriticRequest):
-
+@app.post(
+    "/api/3-critic-review",
+    response_model=CriticResponse,
+)
+async def critic_review(
+    request: CriticRequest,
+):
     requirements_text = "\n".join(
         [
-            f"- {r.clause_id}: {r.description} "
-            f"(mandatory={r.is_mandatory})"
-            for r in request.requirements
+            (
+                f"- {requirement.clause_id}: "
+                f"{requirement.description} "
+                f"(mandatory="
+                f"{requirement.is_mandatory})"
+            )
+            for requirement in request.requirements
         ]
     )
 
     prompt = f"""
 You are a strict RFP compliance auditor.
 
-Evaluate the proposal AGAINST ONLY the supplied RFP requirements.
+Evaluate the proposal AGAINST ONLY the
+supplied RFP requirements.
 
-For every requirement, return exactly one result.
+For every requirement, determine:
 
-Status definitions:
-- satisfied = clearly addressed by the proposal
-- partial = partially addressed or required evidence is incomplete
-- missing = absent from the proposal
+- satisfied =
+  clearly addressed by the proposal
+
+- partial =
+  partially addressed or required evidence
+  is incomplete
+
+- missing =
+  absent from the proposal
 
 Do not invent additional requirements.
 
-Clause IDs MUST exactly match the supplied clause IDs.
+Clause IDs MUST exactly match the supplied
+clause IDs.
 
 RFP REQUIREMENTS:
 {requirements_text}
@@ -405,12 +706,13 @@ Return ONLY valid JSON:
 """
 
     response = client.chat.completions.create(
-        model="gpt-6-astra",
+        model="gpt-5.6-luna",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are a strict RFP compliance auditor. "
+                    "You are a strict RFP "
+                    "compliance auditor. "
                     "Return valid JSON only."
                 ),
             },
@@ -419,26 +721,59 @@ Return ONLY valid JSON:
                 "content": prompt,
             },
         ],
-        response_format={"type": "json_object"},
+        response_format={
+            "type": "json_object"
+        },
     )
 
-    raw = json.loads(response.choices[0].message.content)
+    raw_content = (
+        response.choices[0]
+        .message
+        .content
+    )
+
+    if not raw_content:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Critic model returned "
+                "an empty response."
+            ),
+        )
+
+    try:
+        raw = json.loads(
+            raw_content
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Critic returned invalid JSON: {exc}"
+            ),
+        )
 
     checks = [
         CriticFlag(**item)
-        for item in raw.get("checks", [])
+        for item in raw.get(
+            "checks",
+            [],
+        )
     ]
 
-    # Ensure every requirement gets a result.
     expected_ids = {
-        r.clause_id for r in request.requirements
+        requirement.clause_id
+        for requirement in request.requirements
     }
 
     returned_ids = {
-        c.clause_id for c in checks
+        check.clause_id
+        for check in checks
     }
 
-    missing_ids = expected_ids - returned_ids
+    missing_ids = (
+        expected_ids - returned_ids
+    )
 
     for clause_id in missing_ids:
         checks.append(
@@ -446,19 +781,22 @@ Return ONLY valid JSON:
                 clause_id=clause_id,
                 status="missing",
                 severity="high",
-                issue="No compliance result was returned for this clause.",
-                suggestion="Review this requirement manually.",
+                issue=(
+                    "No compliance result "
+                    "was returned for "
+                    "this clause."
+                ),
+                suggestion=(
+                    "Review this requirement "
+                    "manually."
+                ),
             )
         )
 
-    # -----------------------------
-    # Deterministic score
-    # -----------------------------
-
     mandatory_requirements = [
-        r
-        for r in request.requirements
-        if r.is_mandatory
+        requirement
+        for requirement in request.requirements
+        if requirement.is_mandatory
     ]
 
     satisfied_count = 0
@@ -468,18 +806,31 @@ Return ONLY valid JSON:
             (
                 check
                 for check in checks
-                if check.clause_id == requirement.clause_id
+                if check.clause_id
+                == requirement.clause_id
             ),
             None,
         )
 
-        if matching_check and matching_check.status == "satisfied":
+        if (
+            matching_check
+            and matching_check.status
+            == "satisfied"
+        ):
             satisfied_count += 1
 
-    total_mandatory = len(mandatory_requirements)
+    total_mandatory = len(
+        mandatory_requirements
+    )
 
     compliance_score = (
-        round((satisfied_count / total_mandatory) * 100)
+        round(
+            (
+                satisfied_count
+                / total_mandatory
+            )
+            * 100
+        )
         if total_mandatory
         else 100
     )
@@ -487,9 +838,14 @@ Return ONLY valid JSON:
     blocking_flags = [
         check
         for check in checks
-        if check.status in {"missing", "partial"}
+        if check.status
+        in {
+            "missing",
+            "partial",
+        }
         and any(
-            requirement.clause_id == check.clause_id
+            requirement.clause_id
+            == check.clause_id
             and requirement.is_mandatory
             for requirement in mandatory_requirements
         )
@@ -498,5 +854,7 @@ Return ONLY valid JSON:
     return CriticResponse(
         compliance_score=compliance_score,
         flags=blocking_flags,
-        approved=len(blocking_flags) == 0,
+        approved=(
+            len(blocking_flags) == 0
+        ),
     )
