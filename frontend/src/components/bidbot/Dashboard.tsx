@@ -1336,7 +1336,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       ]);
 
       // ------------------------------------------------------------
-      // AGENT 4 — CRITIC ENGINE
+      // AGENT 4 — ADVERSARIAL CRITIC
       // ------------------------------------------------------------
       setActiveNode(3);
 
@@ -1365,26 +1365,123 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         );
       }
 
-      const criticData = await criticRes.json();
+      let criticData = await criticRes.json();
 
+      setLines((prev) => [
+        ...prev,
+        `✦ [Critic Engine] ${
+          criticData.flags?.length || 0
+        } compliance risks identified.`,
+      ]);
+
+      // ------------------------------------------------------------
+      // ONE REVISION CYCLE
+      // ------------------------------------------------------------
+      if (
+        criticData.flags &&
+        criticData.flags.length > 0
+      ) {
+        setActiveNode(2);
+
+        setLines((prev) => [
+          ...prev,
+          "✦ [Drafting LLM] Critic feedback received. Revising proposal...",
+        ]);
+
+        const revisionRes = await fetch(
+          "http://127.0.0.1:8000/api/2-draft-proposal",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              requirements,
+              evidence,
+              previous_draft: draftData.draft,
+              critic_feedback: criticData.flags,
+            }),
+          },
+        );
+
+        if (!revisionRes.ok) {
+          throw new Error(
+            `Proposal revision failed: ${revisionRes.status}`,
+          );
+        }
+
+        const revisionData = await revisionRes.json();
+
+        setDraftText(revisionData.draft);
+
+        setLines((prev) => [
+          ...prev,
+          "✦ [Drafting LLM] ✓ Revision complete. Re-running compliance audit...",
+        ]);
+
+        // ----------------------------------------------------------
+        // RE-CRITIC
+        // ----------------------------------------------------------
+        setActiveNode(3);
+
+        const secondCriticRes = await fetch(
+          "http://127.0.0.1:8000/api/3-critic-review",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              requirements,
+              draft: revisionData.draft,
+            }),
+          },
+        );
+
+        if (!secondCriticRes.ok) {
+          throw new Error(
+            `Re-review failed: ${secondCriticRes.status}`,
+          );
+        }
+
+        criticData = await secondCriticRes.json();
+
+        setLines((prev) => [
+          ...prev,
+          `✦ [Critic Engine] ✓ Re-audit complete. ${
+            criticData.flags?.length || 0
+          } risks remain.`,
+        ]);
+      }
+
+      // ------------------------------------------------------------
+      // FINAL RESULT
+      // ------------------------------------------------------------
       setCriticFlags(criticData.flags || []);
       setScore(criticData.compliance_score || 0);
 
-      if (criticData.flags && criticData.flags.length > 0) {
+      if (
+        criticData.flags &&
+        criticData.flags.length > 0
+      ) {
         setLines((prev) => [
           ...prev,
-          `✦ [Critic Engine] ✗ Found ${criticData.flags.length} compliance risks.`,
+          `✦ [Critic Engine] ✗ ${
+            criticData.flags.length
+          } compliance risks remain after revision.`,
         ]);
       } else {
         setLines((prev) => [
           ...prev,
-          "✦ [Critic Engine] ✓ Audit passed cleanly.",
+          "✦ [Critic Engine] ✓ Audit passed cleanly after revision.",
         ]);
       }
 
       setLines((prev) => [
         ...prev,
-        `✦ [System] Swarm complete. Score: ${criticData.compliance_score}/100. Awaiting human sign-off.`,
+        `✦ [System] Swarm complete. Score: ${
+          criticData.compliance_score
+        }/100. Awaiting human sign-off.`,
       ]);
 
       setActiveNode(4);
