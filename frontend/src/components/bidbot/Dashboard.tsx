@@ -13,16 +13,16 @@ import ReactMarkdown from "react-markdown";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
+const API_BASE_URL =
+  import.meta.env["VITE_API_BASE_URL"] ||
+  "http://127.0.0.1:8000";
+
 const NODES = [
   "Document Parser",
   "Evidence Retriever",
   "Drafting LLM",
   "Critic Engine",
 ];
-
-const API_BASE_URL =
-  import.meta.env["VITE_API_BASE_URL"] ||
-  "http://127.0.0.1:8000";
 
 type CriticFlag = {
   clause_id: string;
@@ -41,21 +41,49 @@ type EvidenceRecord = {
   relevance_score: number;
 };
 
-export function Dashboard({ onBack }: { onBack: () => void }) {
+type Requirement = {
+  clause_id: string;
+  description: string;
+  is_mandatory: boolean;
+};
+
+type WorkspaceTab =
+  | "proposal"
+  | "compliance"
+  | "evidence";
+
+export function Dashboard({
+  onBack,
+}: {
+  onBack: () => void;
+}) {
   const [running, setRunning] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFile, setSelectedFile] =
+    useState<File | null>(null);
   const [drag, setDrag] = useState(false);
-  const [approved, setApproved] = useState(false);
+  const [approved, setApproved] =
+    useState(false);
 
-  const termRef = useRef<HTMLDivElement>(null);
+  const [activeTab, setActiveTab] =
+    useState<WorkspaceTab>("proposal");
 
-  const [activeNode, setActiveNode] = useState(0);
+  const termRef =
+    useRef<HTMLDivElement>(null);
+
+  const [activeNode, setActiveNode] =
+    useState(0);
   const [score, setScore] = useState(0);
-  const [initialScore, setInitialScore] = useState(0);
-  const [draftText, setDraftText] = useState("");
-  const [criticFlags, setCriticFlags] = useState<CriticFlag[]>([]);
-  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
+  const [initialScore, setInitialScore] =
+    useState(0);
+  const [draftText, setDraftText] =
+    useState("");
+  const [criticFlags, setCriticFlags] =
+    useState<CriticFlag[]>([]);
+  const [evidence, setEvidence] =
+    useState<EvidenceRecord[]>([]);
+  const [requirements, setRequirements] =
+    useState<Requirement[]>([]);
 
   useEffect(() => {
     termRef.current?.scrollTo({
@@ -65,7 +93,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
   }, [lines]);
 
   // ------------------------------------------------------------
-  // RESET WORKSPACE WHEN A NEW FILE IS SELECTED
+  // RESET WORKSPACE
   // ------------------------------------------------------------
 
   const handleFileSelected = (file: File) => {
@@ -75,9 +103,11 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
     setDraftText("");
     setCriticFlags([]);
     setEvidence([]);
+    setRequirements([]);
     setApproved(false);
     setLines([]);
     setActiveNode(0);
+    setActiveTab("proposal");
   };
 
   // ------------------------------------------------------------
@@ -94,11 +124,14 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       format: "a4",
     });
 
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
+    const pageWidth =
+      doc.internal.pageSize.getWidth();
+    const pageHeight =
+      doc.internal.pageSize.getHeight();
 
     const margin = 52;
-    const contentWidth = pageWidth - margin * 2;
+    const contentWidth =
+      pageWidth - margin * 2;
 
     const navy: RGB = [24, 32, 48];
     const muted: RGB = [100, 108, 120];
@@ -110,8 +143,13 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
 
     let y = 52;
 
-    const ensureSpace = (height: number) => {
-      if (y + height > pageHeight - 52) {
+    const ensureSpace = (
+      height: number,
+    ) => {
+      if (
+        y + height >
+        pageHeight - 52
+      ) {
         doc.addPage();
         y = 58;
       }
@@ -136,14 +174,18 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         navy[2],
       );
 
-      const lines = doc.splitTextToSize(
-        text,
-        contentWidth,
-      ) as string[];
+      const wrappedLines =
+        doc.splitTextToSize(
+          text,
+          contentWidth,
+        ) as string[];
 
-      const lineHeight = fontSize * 1.45;
+      const lineHeight =
+        fontSize * 1.45;
 
-      for (const currentLine of lines) {
+      for (
+        const currentLine of wrappedLines
+      ) {
         ensureSpace(lineHeight);
 
         doc.text(
@@ -167,7 +209,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       y += topSpacing;
 
       ensureSpace(
-        size + bottomSpacing + 10,
+        size +
+          bottomSpacing +
+          10,
       );
 
       doc.setFont(
@@ -209,7 +253,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       y += bottomSpacing;
     };
 
-    const addBullet = (text: string) => {
+    const addBullet = (
+      text: string,
+    ) => {
       ensureSpace(24);
 
       doc.setFont(
@@ -225,8 +271,10 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         navy[2],
       );
 
-      const bulletX = margin + 4;
-      const textX = margin + 16;
+      const bulletX =
+        margin + 4;
+      const textX =
+        margin + 16;
 
       doc.text(
         "•",
@@ -234,20 +282,26 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         y,
       );
 
-      const lines = doc.splitTextToSize(
-        text,
-        contentWidth - 16,
-      ) as string[];
+      const wrappedLines =
+        doc.splitTextToSize(
+          text,
+          contentWidth - 16,
+        ) as string[];
 
-      const lineHeight = 10 * 1.45;
+      const lineHeight =
+        10 * 1.45;
 
-      lines.forEach(
+      wrappedLines.forEach(
         (
           currentLine: string,
           lineIndex: number,
         ) => {
-          if (lineIndex > 0) {
-            ensureSpace(lineHeight);
+          if (
+            lineIndex > 0
+          ) {
+            ensureSpace(
+              lineHeight,
+            );
           }
 
           doc.text(
@@ -299,7 +353,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         .split("|")
         .map(
           (cell) =>
-            cleanInlineMarkdown(cell),
+            cleanInlineMarkdown(
+              cell,
+            ),
         );
 
     const isTableSeparator = (
@@ -521,7 +577,10 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       margin + 110,
       y + 40,
       ((contentWidth - 126) *
-        Math.min(score, 100)) /
+        Math.min(
+          score,
+          100,
+        )) /
         100,
       10,
       5,
@@ -546,7 +605,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       criticFlags.length === 0
         ? "No compliance risks flagged"
         : `${criticFlags.length} compliance risk${
-            criticFlags.length === 1
+            criticFlags.length ===
+            1
               ? ""
               : "s"
           } require attention`,
@@ -567,7 +627,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       16,
     );
 
-    if (criticFlags.length === 0) {
+    if (
+      criticFlags.length === 0
+    ) {
       doc.setFillColor(
         236,
         248,
@@ -608,9 +670,11 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       criticFlags.forEach(
         (flag) => {
           const severityColor: RGB =
-            flag.severity === "high"
+            flag.severity ===
+            "high"
               ? red
-              : flag.severity === "medium"
+              : flag.severity ===
+                  "medium"
                 ? amber
                 : green;
 
@@ -698,7 +762,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
             y + 19,
           );
 
-          let cardY = y + 39;
+          let cardY =
+            y + 39;
 
           doc.setFont(
             "helvetica",
@@ -714,7 +779,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
           );
 
           issueLines.forEach(
-            (currentLine: string) => {
+            (
+              currentLine: string,
+            ) => {
               doc.text(
                 currentLine,
                 margin + 16,
@@ -732,7 +799,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
             "bold",
           );
 
-          doc.setFontSize(8.5);
+          doc.setFontSize(
+            8.5,
+          );
 
           doc.setTextColor(
             muted[0],
@@ -741,7 +810,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
           );
 
           suggestionLines.forEach(
-            (currentLine: string) => {
+            (
+              currentLine: string,
+            ) => {
               doc.text(
                 currentLine,
                 margin + 16,
@@ -752,7 +823,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
             },
           );
 
-          y += cardHeight + 12;
+          y +=
+            cardHeight + 12;
         },
       );
     }
@@ -762,7 +834,6 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
     // ============================================================
 
     doc.addPage();
-
     y = 64;
 
     const sourceLines =
@@ -773,10 +844,12 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
     let index = 0;
 
     while (
-      index < sourceLines.length
+      index <
+      sourceLines.length
     ) {
       const currentLine =
-        sourceLines[index] ?? "";
+        sourceLines[index] ??
+        "";
 
       const line =
         currentLine.trim();
@@ -788,7 +861,11 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       }
 
       // Horizontal rule
-      if (/^---+$/.test(line)) {
+      if (
+        /^---+$/.test(
+          line,
+        )
+      ) {
         ensureSpace(12);
 
         doc.setDrawColor(
@@ -807,13 +884,16 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         );
 
         y += 14;
-
         index += 1;
         continue;
       }
 
       // H1
-      if (line.startsWith("# ")) {
+      if (
+        line.startsWith(
+          "# ",
+        )
+      ) {
         addHeading(
           cleanInlineMarkdown(
             line.slice(2),
@@ -828,7 +908,11 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       }
 
       // H2
-      if (line.startsWith("## ")) {
+      if (
+        line.startsWith(
+          "## ",
+        )
+      ) {
         addHeading(
           cleanInlineMarkdown(
             line.slice(3),
@@ -843,7 +927,11 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       }
 
       // H3
-      if (line.startsWith("### ")) {
+      if (
+        line.startsWith(
+          "### ",
+        )
+      ) {
         ensureSpace(28);
 
         y += 10;
@@ -870,7 +958,6 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         );
 
         y += 20;
-
         index += 1;
         continue;
       }
@@ -881,15 +968,20 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
           ?.trim() ?? "";
 
       if (
-        line.startsWith("|") &&
+        line.startsWith(
+          "|",
+        ) &&
         line.endsWith("|") &&
-        nextLine.startsWith("|")
+        nextLine.startsWith(
+          "|",
+        )
       ) {
         const tableLines: string[] =
           [];
 
         while (
-          index < sourceLines.length
+          index <
+          sourceLines.length
         ) {
           const tableLine =
             sourceLines[index]
@@ -919,7 +1011,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         if (
           headerLine !==
             undefined &&
-          tableLines.length >= 2
+          tableLines.length >=
+            2
         ) {
           const headers =
             parseTableRow(
@@ -964,26 +1057,22 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
               font: "helvetica",
               fontSize: 7.5,
               cellPadding: 5,
-
               textColor:
                 navy as RGB,
-
               lineColor:
                 border as RGB,
-
               lineWidth: 0.5,
               overflow:
                 "linebreak",
-              valign: "top",
+              valign:
+                "top",
             },
 
             headStyles: {
               fillColor:
                 navy as RGB,
-
               textColor:
                 [255, 255, 255] as RGB,
-
               fontStyle: "bold",
               fontSize: 7.5,
             },
@@ -1018,7 +1107,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
 
       // Bullets
       if (
-        /^[-*]\s+/.test(line)
+        /^[-*]\s+/.test(
+          line,
+        )
       ) {
         addBullet(
           cleanInlineMarkdown(
@@ -1035,7 +1126,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
 
       // Numbered list
       if (
-        /^\d+\.\s+/.test(line)
+        /^\d+\.\s+/.test(
+          line,
+        )
       ) {
         const match =
           line.match(
@@ -1083,7 +1176,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
               contentWidth - 18,
             ) as string[];
 
-          const lineHeight = 14;
+          const lineHeight =
+            14;
 
           numberedLines.forEach(
             (
@@ -1091,8 +1185,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
               numberedIndex: number,
             ) => {
               if (
-                numberedIndex >
-                0
+                numberedIndex > 0
               ) {
                 ensureSpace(
                   lineHeight,
@@ -1132,7 +1225,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
     }
 
     // ============================================================
-    // HEADER / FOOTER
+    // HEADERS / FOOTERS
     // ============================================================
 
     const pageCount =
@@ -1231,7 +1324,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
   };
 
   // ------------------------------------------------------------
-  // MAIN AGENT PIPELINE
+  // AGENT PIPELINE
   // ------------------------------------------------------------
 
   const runAgentSwarm = async () => {
@@ -1249,7 +1342,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
     setDraftText("");
     setCriticFlags([]);
     setEvidence([]);
+    setRequirements([]);
     setApproved(false);
+    setActiveTab("proposal");
 
     try {
       // ==========================================================
@@ -1263,7 +1358,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         "✦ [Parser Node] Ingesting PDF and extracting constraints...",
       ]);
 
-      const formData = new FormData();
+      const formData =
+        new FormData();
 
       formData.append(
         "file",
@@ -1280,25 +1376,47 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         );
 
       if (!parseRes.ok) {
+        let errorMessage =
+          `RFP parsing failed: ${parseRes.status}`;
+
+        try {
+          const errorData =
+            await parseRes.json();
+
+          if (
+            typeof errorData.detail ===
+            "string"
+          ) {
+            errorMessage =
+              errorData.detail;
+          }
+        } catch {
+          // Keep fallback.
+        }
+
         throw new Error(
-          `RFP parsing failed: ${parseRes.status}`,
+          errorMessage,
         );
       }
 
       const parsedData =
         await parseRes.json();
 
-      const requirements =
+      const parsedRequirements: Requirement[] =
         parsedData.requirements ||
         [];
 
+      setRequirements(
+        parsedRequirements,
+      );
+
       setLines((prev) => [
         ...prev,
-        `✦ [Parser Node] ✓ Extracted ${requirements.length} mandatory rules from "${parsedData.project_title}"`,
+        `✦ [Parser Node] ✓ Extracted ${parsedRequirements.length} mandatory rules from "${parsedData.project_title}"`,
       ]);
 
       // ==========================================================
-      // AGENT 2 — EVIDENCE RETRIEVER
+      // AGENT 2 — RETRIEVER
       // ==========================================================
 
       setActiveNode(1);
@@ -1318,7 +1436,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                 "application/json",
             },
             body: JSON.stringify({
-              requirements,
+              requirements:
+                parsedRequirements,
             }),
           },
         );
@@ -1340,12 +1459,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         retrievedEvidence,
       );
 
-      const evidence =
-        retrievedEvidence;
-
       setLines((prev) => [
         ...prev,
-        `✦ [Evidence Retriever] ✓ Found ${evidence.length} relevant verified evidence records.`,
+        `✦ [Evidence Retriever] ✓ Found ${retrievedEvidence.length} relevant verified evidence records.`,
       ]);
 
       // ==========================================================
@@ -1369,8 +1485,10 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                 "application/json",
             },
             body: JSON.stringify({
-              requirements,
-              evidence,
+              requirements:
+                parsedRequirements,
+              evidence:
+                retrievedEvidence,
             }),
           },
         );
@@ -1414,8 +1532,10 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                 "application/json",
             },
             body: JSON.stringify({
-              requirements,
-              draft: draftData.draft,
+              requirements:
+                parsedRequirements,
+              draft:
+                draftData.draft,
             }),
           },
         );
@@ -1429,8 +1549,6 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
       let criticData =
         await criticRes.json();
 
-      // Keep this local because React state updates
-      // are asynchronous.
       const firstScore =
         criticData.compliance_score ||
         0;
@@ -1469,8 +1587,10 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                   "application/json",
               },
               body: JSON.stringify({
-                requirements,
-                evidence,
+                requirements:
+                  parsedRequirements,
+                evidence:
+                  retrievedEvidence,
                 previous_draft:
                   draftData.draft,
                 critic_feedback:
@@ -1513,7 +1633,8 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                   "application/json",
               },
               body: JSON.stringify({
-                requirements,
+                requirements:
+                  parsedRequirements,
                 draft:
                   revisionData.draft,
               }),
@@ -1683,7 +1804,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
           </div>
 
           <motion.button
-            whileTap={{ scale: 0.96 }}
+            whileTap={{
+              scale: 0.96,
+            }}
             transition={spring}
             disabled={
               running || !draftText
@@ -1823,7 +1946,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         </section>
 
         {/* ======================================================
-            COLUMN 2 — AGENT GRAPH
+            COLUMN 2 — AGENT GRAPH + LOG
         ====================================================== */}
 
         <section className="flex min-h-0 flex-col border-r border-border">
@@ -1950,6 +2073,9 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                             ) ||
                             line.includes(
                               "Score:",
+                            ) ||
+                            line.includes(
+                              "Improvement:",
                             )
                           ? "text-success"
                           : "text-muted-foreground"
@@ -1979,91 +2105,328 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
         </section>
 
         {/* ======================================================
-            COLUMN 3 — DRAFT WORKSPACE
+            COLUMN 3 — WORKSPACE
         ====================================================== */}
 
         <section className="flex min-h-0 flex-col overflow-hidden bg-background">
-          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background px-6 py-2">
-            <Label>
-              Draft Workspace
-            </Label>
+          {/* Workspace Header */}
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-5">
+            <div className="flex items-center gap-1">
+              <WorkspaceTabButton
+                active={
+                  activeTab ===
+                  "proposal"
+                }
+                onClick={() =>
+                  setActiveTab(
+                    "proposal",
+                  )
+                }
+              >
+                Proposal
+              </WorkspaceTabButton>
+
+              <WorkspaceTabButton
+                active={
+                  activeTab ===
+                  "compliance"
+                }
+                onClick={() =>
+                  setActiveTab(
+                    "compliance",
+                  )
+                }
+              >
+                Compliance
+              </WorkspaceTabButton>
+
+              <WorkspaceTabButton
+                active={
+                  activeTab ===
+                  "evidence"
+                }
+                onClick={() =>
+                  setActiveTab(
+                    "evidence",
+                  )
+                }
+              >
+                Evidence
+              </WorkspaceTabButton>
+            </div>
 
             <span className="font-mono text-xs text-muted-foreground">
-              {draftText
-                ? "Live Edit"
-                : "Awaiting Swarm"}
+              {activeTab ===
+              "proposal"
+                ? draftText
+                  ? "Live Edit"
+                  : "Awaiting Swarm"
+                : activeTab ===
+                    "compliance"
+                  ? `${requirements.length} clauses`
+                  : `${evidence.length} records`}
             </span>
           </div>
 
-          <article className="mx-auto w-full max-w-3xl overflow-y-auto px-8 py-8">
-            {/* ==================================================
-                CRITIC WARNINGS
-            ================================================== */}
+          {/* ====================================================
+              PROPOSAL TAB
+          ==================================================== */}
 
-            {criticFlags.length >
-              0 && (
-              <div className="mb-10 rounded-lg border border-warning/30 bg-warning/5 p-5">
-                <div className="mb-4 flex items-center gap-2 font-medium text-warning">
-                  <AlertTriangle className="h-5 w-5" />
-
-                  Critic Engine flagged{" "}
-                  {
-                    criticFlags.length
-                  }{" "}
-                  compliance risk
-                  {criticFlags.length ===
-                  1
-                    ? ""
-                    : "s"}
+          {activeTab ===
+            "proposal" && (
+            <article className="mx-auto w-full max-w-3xl overflow-y-auto px-8 py-8">
+              {draftText ? (
+                <div className="text-sm leading-relaxed text-foreground [&>h1]:mb-6 [&>h1]:text-3xl [&>h1]:font-bold [&>h2]:mb-4 [&>h2]:mt-10 [&>h2]:border-b [&>h2]:border-border [&>h2]:pb-2 [&>h2]:text-xl [&>h2]:font-semibold [&>h3]:mb-3 [&>h3]:mt-6 [&>h3]:text-lg [&>h3]:font-medium [&>p]:mb-5 [&>ul]:mb-5 [&>ul]:list-outside [&>ul]:list-disc [&>ul]:pl-5 [&>li]:mb-2">
+                  <ReactMarkdown>
+                    {draftText}
+                  </ReactMarkdown>
                 </div>
-
-                <div className="flex max-h-52 flex-col gap-3 overflow-y-auto pr-2 custom-scrollbar">
-                  {criticFlags.map(
-                    (
-                      flag,
-                      index,
-                    ) => (
-                      <div
-                        key={`${flag.clause_id}-${index}`}
-                        className="rounded border border-warning/10 bg-background/60 p-3 text-sm shadow-sm"
-                      >
-                        <span className="font-bold text-warning">
-                          {flag.severity.toUpperCase()}:{" "}
-                        </span>
-
-                        <span>
-                          Clause{" "}
-                          {
-                            flag.clause_id
-                          }
-                        </span>
-
-                        <span className="ml-1">
-                          {
-                            flag.issue
-                          }
-                        </span>
-
-                        <p className="mt-1.5 text-muted-foreground">
-                          {
-                            flag.suggestion
-                          }
-                        </p>
-                      </div>
-                    ),
-                  )}
+              ) : (
+                <div className="mt-32 text-center font-mono text-sm text-muted-foreground">
+                  [ Document empty. Deploy swarm to generate draft. ]
                 </div>
+              )}
+
+              {draftText && (
+                <div className="mt-16 border-t border-border pt-6 font-mono text-xs text-muted-foreground">
+                  Reviewer sign-off:{" "}
+                  {approved
+                    ? "Human-in-the-loop · approved"
+                    : "pending"}
+                </div>
+              )}
+            </article>
+          )}
+
+          {/* ====================================================
+              COMPLIANCE TAB
+          ==================================================== */}
+
+          {activeTab ===
+            "compliance" && (
+            <article className="flex-1 overflow-y-auto px-6 py-6">
+              {/* Score summary */}
+              <div className="mb-6 grid grid-cols-3 gap-3">
+                <MetricCard
+                  label="Final Score"
+                  value={`${score}/100`}
+                />
+
+                <MetricCard
+                  label="Initial Score"
+                  value={
+                    initialScore > 0
+                      ? `${initialScore}/100`
+                      : "—"
+                  }
+                />
+
+                <MetricCard
+                  label="Improvement"
+                  value={
+                    initialScore > 0 &&
+                    score !== 0
+                      ? `${
+                          score -
+                          initialScore >
+                          0
+                            ? "+"
+                            : ""
+                        }${
+                          score -
+                          initialScore
+                        }`
+                      : "—"
+                  }
+                />
               </div>
-            )}
 
-            {/* ==================================================
-                EVIDENCE PROVENANCE
-            ================================================== */}
-
-            {evidence.length >
-              0 && (
-              <div className="mb-10 rounded-lg border border-border bg-card/30 p-5">
+              {/* Compliance Matrix */}
+              <div className="rounded-lg border border-border bg-card/30 p-5">
                 <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-foreground">
+                      Compliance Matrix
+                    </div>
+
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Requirement-level audit status
+                    </div>
+                  </div>
+
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {
+                      requirements.length
+                    }{" "}
+                    clauses
+                  </span>
+                </div>
+
+                {requirements.length >
+                0 ? (
+                  <div className="overflow-hidden rounded border border-border">
+                    <div className="grid grid-cols-[70px_1fr_100px_1.2fr] border-b border-border bg-secondary/50 px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <span>
+                        Clause
+                      </span>
+
+                      <span>
+                        Requirement
+                      </span>
+
+                      <span>
+                        Status
+                      </span>
+
+                      <span>
+                        Evidence
+                      </span>
+                    </div>
+
+                    {requirements.map(
+                      (requirement) => {
+                        const flag =
+                          criticFlags.find(
+                            (item) =>
+                              item.clause_id ===
+                              requirement.clause_id,
+                          );
+
+                        const status =
+                          !draftText
+                            ? "pending"
+                            : flag?.status ||
+                              "satisfied";
+
+                        const topEvidence =
+                          evidence.find(
+                            (item) =>
+                              item.requirement_id ===
+                              requirement.clause_id,
+                          );
+
+                        return (
+                          <div
+                            key={
+                              requirement.clause_id
+                            }
+                            className="grid grid-cols-[70px_1fr_100px_1.2fr] items-start border-b border-border px-3 py-3 text-xs last:border-b-0"
+                          >
+                            <span className="font-mono font-medium text-accent">
+                              {
+                                requirement.clause_id
+                              }
+                            </span>
+
+                            <span className="pr-3 text-foreground">
+                              {
+                                requirement.description
+                              }
+                            </span>
+
+                            <span
+                              className={`font-mono text-[10px] uppercase ${
+                                status ===
+                                "satisfied"
+                                  ? "text-success"
+                                  : status ===
+                                      "partial"
+                                    ? "text-warning"
+                                    : status ===
+                                        "missing"
+                                      ? "text-destructive"
+                                      : "text-muted-foreground"
+                              }`}
+                            >
+                              {
+                                status
+                              }
+                            </span>
+
+                            <span className="pr-1 text-muted-foreground">
+                              {topEvidence
+                                ? topEvidence.title
+                                : "No matching evidence"}
+                            </span>
+                          </div>
+                        );
+                      },
+                    )}
+                  </div>
+                ) : (
+                  <EmptyState text="Run the agent swarm to generate the compliance matrix." />
+                )}
+              </div>
+
+              {/* Critic Findings */}
+              {criticFlags.length >
+                0 && (
+                <div className="mt-6 rounded-lg border border-warning/30 bg-warning/5 p-5">
+                  <div className="mb-4 flex items-center gap-2 font-medium text-warning">
+                    <AlertTriangle className="h-5 w-5" />
+
+                    Critic Engine flagged{" "}
+                    {
+                      criticFlags.length
+                    }{" "}
+                    compliance risk
+                    {criticFlags.length ===
+                    1
+                      ? ""
+                      : "s"}
+                  </div>
+
+                  <div className="flex flex-col gap-3">
+                    {criticFlags.map(
+                      (
+                        flag,
+                        index,
+                      ) => (
+                        <div
+                          key={`${flag.clause_id}-${index}`}
+                          className="rounded border border-warning/10 bg-background/60 p-3 text-sm"
+                        >
+                          <div className="mb-1">
+                            <span className="font-bold text-warning">
+                              {flag.severity.toUpperCase()}
+                            </span>
+
+                            <span className="ml-2 font-mono text-xs text-accent">
+                              {
+                                flag.clause_id
+                              }
+                            </span>
+                          </div>
+
+                          <p className="text-foreground">
+                            {
+                              flag.issue
+                            }
+                          </p>
+
+                          <p className="mt-1.5 text-muted-foreground">
+                            {
+                              flag.suggestion
+                            }
+                          </p>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
+          {/* ====================================================
+              EVIDENCE TAB
+          ==================================================== */}
+
+          {activeTab ===
+            "evidence" && (
+            <article className="flex-1 overflow-y-auto px-6 py-6">
+              <div className="rounded-lg border border-border bg-card/30 p-5">
+                <div className="mb-5 flex items-center justify-between">
                   <div>
                     <div className="font-medium text-foreground">
                       Evidence Trace
@@ -2082,92 +2445,122 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                   </span>
                 </div>
 
-                <div className="flex max-h-64 flex-col gap-2 overflow-y-auto pr-2 custom-scrollbar">
-                  {evidence.map(
-                    (item) => (
-                      <div
-                        key={`${item.requirement_id}-${item.source_id}`}
-                        className="rounded border border-border bg-background/60 p-3"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-mono text-xs text-accent">
+                {evidence.length >
+                0 ? (
+                  <div className="flex flex-col gap-3">
+                    {evidence.map(
+                      (item) => (
+                        <div
+                          key={`${item.requirement_id}-${item.source_id}`}
+                          className="rounded border border-border bg-background/60 p-4"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-mono text-xs text-accent">
+                              {
+                                item.requirement_id
+                              }
+                            </span>
+
+                            <span className="font-mono text-xs text-muted-foreground">
+                              relevance{" "}
+                              {item.relevance_score.toFixed(
+                                3,
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 text-sm font-medium text-foreground">
                             {
-                              item.requirement_id
+                              item.title
                             }
-                          </span>
+                          </div>
 
-                          <span className="font-mono text-xs text-muted-foreground">
-                            relevance{" "}
-                            {item.relevance_score.toFixed(
-                              3,
-                            )}
-                          </span>
+                          <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {
+                              item.source_type
+                            }
+                          </div>
+
+                          <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                            {
+                              item.content
+                            }
+                          </p>
                         </div>
-
-                        <div className="mt-1 text-sm font-medium text-foreground">
-                          {
-                            item.title
-                          }
-                        </div>
-
-                        <div className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
-                          {
-                            item.source_type
-                          }
-                        </div>
-
-                        <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                          {
-                            item.content
-                          }
-                        </p>
-                      </div>
-                    ),
-                  )}
-                </div>
+                      ),
+                    )}
+                  </div>
+                ) : (
+                  <EmptyState text="Run the agent swarm to retrieve verified evidence." />
+                )}
               </div>
-            )}
-
-            {/* ==================================================
-                PROPOSAL
-            ================================================== */}
-
-            {draftText ? (
-              <div className="text-sm leading-relaxed text-foreground [&>h1]:mb-6 [&>h1]:text-3xl [&>h1]:font-bold [&>h2]:mb-4 [&>h2]:mt-10 [&>h2]:border-b [&>h2]:border-border [&>h2]:pb-2 [&>h2]:text-xl [&>h2]:font-semibold [&>h3]:mb-3 [&>h3]:mt-6 [&>h3]:text-lg [&>h3]:font-medium [&>p]:mb-5 [&>ul]:mb-5 [&>ul]:list-outside [&>ul]:list-disc [&>ul]:pl-5 [&>li]:mb-2"
-              >
-                <ReactMarkdown>
-                  {draftText}
-                </ReactMarkdown>
-              </div>
-            ) : (
-              <div className="mt-32 text-center font-mono text-sm text-muted-foreground">
-                [
-                Document
-                empty.
-                Deploy
-                swarm
-                to
-                generate
-                draft.
-                ]
-              </div>
-            )}
-
-            {/* ==================================================
-                HUMAN SIGN-OFF
-            ================================================== */}
-
-            {draftText && (
-              <div className="mt-16 border-t border-border pt-6 font-mono text-xs text-muted-foreground">
-                Reviewer sign-off:{" "}
-                {approved
-                  ? "Human-in-the-loop · approved"
-                  : "pending"}
-              </div>
-            )}
-          </article>
+            </article>
+          )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function WorkspaceTabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative px-4 py-4 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+        active
+          ? "text-foreground"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+
+      {active && (
+        <motion.div
+          layoutId="workspace-tab"
+          className="absolute bottom-0 left-2 right-2 h-px bg-accent"
+          transition={spring}
+        />
+      )}
+    </button>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card/30 p-4">
+      <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+
+      <div className="mt-2 text-xl font-semibold text-foreground">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({
+  text,
+}: {
+  text: string;
+}) {
+  return (
+    <div className="rounded border border-dashed border-border px-5 py-10 text-center font-mono text-xs text-muted-foreground">
+      {text}
     </div>
   );
 }
