@@ -3,15 +3,21 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
-  ChevronRight,
-  Download,
-  Upload,
   Check,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
+  Database,
+  Download,
+  FileText,
+  ShieldCheck,
+  Upload,
 } from "lucide-react";
-import { spring } from "./motion";
-import ReactMarkdown from "react-markdown";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { spring } from "./motion";
 
 const API_BASE_URL =
   import.meta.env["VITE_API_BASE_URL"] ||
@@ -20,14 +26,25 @@ const API_BASE_URL =
 const NODES = [
   "Document Parser",
   "Evidence Retriever",
-  "Drafting LLM",
-  "Critic Engine",
+  "Proposal Drafter",
+  "Adversarial Critic",
 ];
+
+type WorkspaceTab =
+  | "proposal"
+  | "compliance"
+  | "evidence";
+
+type Requirement = {
+  clause_id: string;
+  description: string;
+  is_mandatory: boolean;
+};
 
 type CriticFlag = {
   clause_id: string;
-  status: "satisfied" | "partial" | "missing";
-  severity: "low" | "medium" | "high";
+  status: string;
+  severity: string;
   issue: string;
   suggestion: string;
 };
@@ -41,29 +58,126 @@ type EvidenceRecord = {
   relevance_score: number;
 };
 
-type Requirement = {
-  clause_id: string;
-  description: string;
-  is_mandatory: boolean;
+type ParserResponse = {
+  project_title: string;
+  requirements: Requirement[];
 };
 
-type WorkspaceTab =
-  | "proposal"
-  | "compliance"
-  | "evidence";
+type CriticResponse = {
+  compliance_score: number;
+  flags: CriticFlag[];
+  approved: boolean;
+};
+
+type EvidenceResponse = {
+  evidence: EvidenceRecord[];
+};
+
+type ActivityTone =
+  | "default"
+  | "success"
+  | "warning"
+  | "error";
+
+type ActivityLine = {
+  text: string;
+  tone: ActivityTone;
+};
+
+function getErrorMessage(
+  data: unknown,
+  fallback: string,
+): string {
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    "detail" in data &&
+    typeof data.detail === "string"
+  ) {
+    return data.detail;
+  }
+
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    "message" in data &&
+    typeof data.message === "string"
+  ) {
+    return data.message;
+  }
+
+  return fallback;
+}
+
+async function fetchJson<T>(
+  url: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await fetch(
+    url,
+    options,
+  );
+
+  const data: unknown =
+    await response
+      .json()
+      .catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(
+      getErrorMessage(
+        data,
+        `Request failed with status ${response.status}`,
+      ),
+    );
+  }
+
+  return data as T;
+}
 
 export function Dashboard({
   onBack,
 }: {
   onBack: () => void;
 }) {
-  const [running, setRunning] = useState(false);
-  const [lines, setLines] = useState<string[]>([]);
+  const [running, setRunning] =
+    useState(false);
+
+  const [lines, setLines] =
+    useState<ActivityLine[]>([]);
+
   const [selectedFile, setSelectedFile] =
     useState<File | null>(null);
-  const [drag, setDrag] = useState(false);
+
+  const [drag, setDrag] =
+    useState(false);
+
   const [approved, setApproved] =
     useState(false);
+
+  const [activeNode, setActiveNode] =
+    useState(0);
+
+  const [score, setScore] =
+    useState(0);
+
+  const [initialScore, setInitialScore] =
+    useState<number | null>(null);
+
+  const [draftText, setDraftText] =
+    useState("");
+
+  const [criticFlags, setCriticFlags] =
+    useState<CriticFlag[]>([]);
+
+  const [evidence, setEvidence] =
+    useState<EvidenceRecord[]>([]);
+
+  const [requirements, setRequirements] =
+    useState<Requirement[]>([]);
+
+  const [projectTitle, setProjectTitle] =
+    useState("");
 
   const [activeTab, setActiveTab] =
     useState<WorkspaceTab>("proposal");
@@ -71,19 +185,8 @@ export function Dashboard({
   const termRef =
     useRef<HTMLDivElement>(null);
 
-  const [activeNode, setActiveNode] =
-    useState(0);
-  const [score, setScore] = useState(0);
-  const [initialScore, setInitialScore] =
-    useState(0);
-  const [draftText, setDraftText] =
-    useState("");
-  const [criticFlags, setCriticFlags] =
-    useState<CriticFlag[]>([]);
-  const [evidence, setEvidence] =
-    useState<EvidenceRecord[]>([]);
-  const [requirements, setRequirements] =
-    useState<Requirement[]>([]);
+  const fileInputRef =
+    useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     termRef.current?.scrollTo({
@@ -92,1245 +195,87 @@ export function Dashboard({
     });
   }, [lines]);
 
-  // ------------------------------------------------------------
-  // RESET WORKSPACE
-  // ------------------------------------------------------------
+  const addLine = (
+    text: string,
+    tone: ActivityTone = "default",
+  ) => {
+    setLines((previous) => [
+      ...previous,
+      {
+        text,
+        tone,
+      },
+    ]);
+  };
 
-  const handleFileSelected = (file: File) => {
+  const handleFileSelected = (
+    file: File | null,
+  ) => {
+    if (!file) {
+      return;
+    }
+
+    if (
+      file.type !== "application/pdf" &&
+      !file.name
+        .toLowerCase()
+        .endsWith(".pdf")
+    ) {
+      alert(
+        "Please select a PDF RFP document.",
+      );
+      return;
+    }
+
+    if (
+      file.size >
+      10 * 1024 * 1024
+    ) {
+      alert(
+        "File is too large. Maximum allowed size is 10 MB.",
+      );
+      return;
+    }
+
     setSelectedFile(file);
     setScore(0);
-    setInitialScore(0);
+    setInitialScore(null);
     setDraftText("");
     setCriticFlags([]);
     setEvidence([]);
     setRequirements([]);
+    setProjectTitle("");
     setApproved(false);
     setLines([]);
     setActiveNode(0);
     setActiveTab("proposal");
   };
 
-  // ------------------------------------------------------------
-  // PDF EXPORT
-  // ------------------------------------------------------------
-
-  const exportProposal = () => {
-    if (!draftText) return;
-
-    type RGB = [number, number, number];
-
-    const doc = new jsPDF({
-      unit: "pt",
-      format: "a4",
-    });
-
-    const pageWidth =
-      doc.internal.pageSize.getWidth();
-    const pageHeight =
-      doc.internal.pageSize.getHeight();
-
-    const margin = 52;
-    const contentWidth =
-      pageWidth - margin * 2;
-
-    const navy: RGB = [24, 32, 48];
-    const muted: RGB = [100, 108, 120];
-    const light: RGB = [244, 246, 248];
-    const border: RGB = [220, 224, 230];
-    const green: RGB = [32, 120, 72];
-    const amber: RGB = [180, 120, 20];
-    const red: RGB = [180, 55, 55];
-
-    let y = 52;
-
-    const ensureSpace = (
-      height: number,
-    ) => {
-      if (
-        y + height >
-        pageHeight - 52
-      ) {
-        doc.addPage();
-        y = 58;
-      }
-    };
-
-    const addWrappedText = (
-      text: string,
-      fontSize = 10,
-      lineGap = 4,
-      bold = false,
-    ) => {
-      doc.setFont(
-        "helvetica",
-        bold ? "bold" : "normal",
-      );
-
-      doc.setFontSize(fontSize);
-
-      doc.setTextColor(
-        navy[0],
-        navy[1],
-        navy[2],
-      );
-
-      const wrappedLines =
-        doc.splitTextToSize(
-          text,
-          contentWidth,
-        ) as string[];
-
-      const lineHeight =
-        fontSize * 1.45;
-
-      for (
-        const currentLine of wrappedLines
-      ) {
-        ensureSpace(lineHeight);
-
-        doc.text(
-          currentLine,
-          margin,
-          y,
-        );
-
-        y += lineHeight;
-      }
-
-      y += lineGap;
-    };
-
-    const addHeading = (
-      text: string,
-      size: number,
-      topSpacing: number,
-      bottomSpacing: number,
-    ) => {
-      y += topSpacing;
-
-      ensureSpace(
-        size +
-          bottomSpacing +
-          10,
-      );
-
-      doc.setFont(
-        "helvetica",
-        "bold",
-      );
-
-      doc.setFontSize(size);
-
-      doc.setTextColor(
-        navy[0],
-        navy[1],
-        navy[2],
-      );
-
-      doc.text(
-        text,
-        margin,
-        y,
-      );
-
-      y += 8;
-
-      doc.setDrawColor(
-        border[0],
-        border[1],
-        border[2],
-      );
-
-      doc.setLineWidth(0.7);
-
-      doc.line(
-        margin,
-        y,
-        pageWidth - margin,
-        y,
-      );
-
-      y += bottomSpacing;
-    };
-
-    const addBullet = (
-      text: string,
-    ) => {
-      ensureSpace(24);
-
-      doc.setFont(
-        "helvetica",
-        "normal",
-      );
-
-      doc.setFontSize(10);
-
-      doc.setTextColor(
-        navy[0],
-        navy[1],
-        navy[2],
-      );
-
-      const bulletX =
-        margin + 4;
-      const textX =
-        margin + 16;
-
-      doc.text(
-        "•",
-        bulletX,
-        y,
-      );
-
-      const wrappedLines =
-        doc.splitTextToSize(
-          text,
-          contentWidth - 16,
-        ) as string[];
-
-      const lineHeight =
-        10 * 1.45;
-
-      wrappedLines.forEach(
-        (
-          currentLine: string,
-          lineIndex: number,
-        ) => {
-          if (
-            lineIndex > 0
-          ) {
-            ensureSpace(
-              lineHeight,
-            );
-          }
-
-          doc.text(
-            currentLine,
-            textX,
-            y,
-          );
-
-          y += lineHeight;
-        },
-      );
-
-      y += 4;
-    };
-
-    const cleanInlineMarkdown = (
-      text: string,
-    ): string =>
-      text
-        .replace(
-          /\*\*(.*?)\*\*/g,
-          "$1",
-        )
-        .replace(
-          /\*(.*?)\*/g,
-          "$1",
-        )
-        .replace(
-          /`(.*?)`/g,
-          "$1",
-        )
-        .replace(
-          /\[(.*?)\]\(.*?\)/g,
-          "$1",
-        )
-        .replace(
-          /~~(.*?)~~/g,
-          "$1",
-        )
-        .trim();
-
-    const parseTableRow = (
-      line: string,
-    ): string[] =>
-      line
-        .trim()
-        .replace(/^\|/, "")
-        .replace(/\|$/, "")
-        .split("|")
-        .map(
-          (cell) =>
-            cleanInlineMarkdown(
-              cell,
-            ),
-        );
-
-    const isTableSeparator = (
-      line: string,
-    ): boolean => {
-      const cells =
-        parseTableRow(line);
-
-      return (
-        cells.length > 0 &&
-        cells.every(
-          (cell) =>
-            /^:?-{3,}:?$/.test(
-              cell,
-            ),
-        )
-      );
-    };
-
-    // ============================================================
-    // COVER
-    // ============================================================
-
-    doc.setFillColor(
-      navy[0],
-      navy[1],
-      navy[2],
+  const handleInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    handleFileSelected(
+      event.target.files?.[0] ??
+        null,
     );
-
-    doc.rect(
-      0,
-      0,
-      pageWidth,
-      118,
-      "F",
-    );
-
-    doc.setTextColor(
-      255,
-      255,
-      255,
-    );
-
-    doc.setFont(
-      "helvetica",
-      "bold",
-    );
-
-    doc.setFontSize(25);
-
-    doc.text(
-      "BidBot",
-      margin,
-      54,
-    );
-
-    doc.setFont(
-      "helvetica",
-      "normal",
-    );
-
-    doc.setFontSize(11);
-
-    doc.text(
-      "AI-Assisted RFP Proposal Workspace",
-      margin,
-      76,
-    );
-
-    doc.setFont(
-      "helvetica",
-      "bold",
-    );
-
-    doc.setFontSize(18);
-
-    doc.text(
-      "Proposal Response",
-      margin,
-      101,
-    );
-
-    y = 150;
-
-    doc.setFont(
-      "helvetica",
-      "normal",
-    );
-
-    doc.setFontSize(9);
-
-    doc.setTextColor(
-      muted[0],
-      muted[1],
-      muted[2],
-    );
-
-    doc.text(
-      "Prepared for: RFP submission",
-      margin,
-      y,
-    );
-
-    doc.text(
-      "Submitted by: Northwind Digital",
-      margin,
-      y + 16,
-    );
-
-    doc.text(
-      `Generated: ${new Date().toLocaleDateString(
-        "en-IN",
-        {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        },
-      )}`,
-      margin,
-      y + 32,
-    );
-
-    y += 68;
-
-    // ============================================================
-    // SCORE CARD
-    // ============================================================
-
-    doc.setFillColor(
-      light[0],
-      light[1],
-      light[2],
-    );
-
-    doc.setDrawColor(
-      border[0],
-      border[1],
-      border[2],
-    );
-
-    doc.roundedRect(
-      margin,
-      y,
-      contentWidth,
-      86,
-      8,
-      8,
-      "FD",
-    );
-
-    doc.setFont(
-      "helvetica",
-      "bold",
-    );
-
-    doc.setFontSize(10);
-
-    doc.setTextColor(
-      muted[0],
-      muted[1],
-      muted[2],
-    );
-
-    doc.text(
-      "COMPLIANCE ASSESSMENT",
-      margin + 16,
-      y + 22,
-    );
-
-    doc.setFont(
-      "helvetica",
-      "bold",
-    );
-
-    doc.setFontSize(30);
-
-    doc.setTextColor(
-      navy[0],
-      navy[1],
-      navy[2],
-    );
-
-    doc.text(
-      `${score}/100`,
-      margin + 16,
-      y + 57,
-    );
-
-    const scoreColor: RGB =
-      score >= 85
-        ? green
-        : score >= 70
-          ? amber
-          : red;
-
-    doc.setFillColor(
-      225,
-      228,
-      232,
-    );
-
-    doc.roundedRect(
-      margin + 110,
-      y + 40,
-      contentWidth - 126,
-      10,
-      5,
-      5,
-      "F",
-    );
-
-    doc.setFillColor(
-      scoreColor[0],
-      scoreColor[1],
-      scoreColor[2],
-    );
-
-    doc.roundedRect(
-      margin + 110,
-      y + 40,
-      ((contentWidth - 126) *
-        Math.min(
-          score,
-          100,
-        )) /
-        100,
-      10,
-      5,
-      5,
-      "F",
-    );
-
-    doc.setFont(
-      "helvetica",
-      "normal",
-    );
-
-    doc.setFontSize(9);
-
-    doc.setTextColor(
-      muted[0],
-      muted[1],
-      muted[2],
-    );
-
-    doc.text(
-      criticFlags.length === 0
-        ? "No compliance risks flagged"
-        : `${criticFlags.length} compliance risk${
-            criticFlags.length ===
-            1
-              ? ""
-              : "s"
-          } require attention`,
-      margin + 110,
-      y + 65,
-    );
-
-    y += 112;
-
-    // ============================================================
-    // COMPLIANCE REVIEW
-    // ============================================================
-
-    addHeading(
-      "Compliance Review",
-      16,
-      0,
-      16,
-    );
-
-    if (
-      criticFlags.length === 0
-    ) {
-      doc.setFillColor(
-        236,
-        248,
-        240,
-      );
-
-      doc.roundedRect(
-        margin,
-        y,
-        contentWidth,
-        48,
-        6,
-        6,
-        "F",
-      );
-
-      doc.setFont(
-        "helvetica",
-        "bold",
-      );
-
-      doc.setFontSize(10);
-
-      doc.setTextColor(
-        green[0],
-        green[1],
-        green[2],
-      );
-
-      doc.text(
-        "✓ No compliance risks were identified.",
-        margin + 14,
-        y + 29,
-      );
-
-      y += 66;
-    } else {
-      criticFlags.forEach(
-        (flag) => {
-          const severityColor: RGB =
-            flag.severity ===
-            "high"
-              ? red
-              : flag.severity ===
-                  "medium"
-                ? amber
-                : green;
-
-          const issueLines =
-            doc.splitTextToSize(
-              cleanInlineMarkdown(
-                flag.issue,
-              ),
-              contentWidth - 28,
-            ) as string[];
-
-          const suggestionLines =
-            doc.splitTextToSize(
-              `Recommendation: ${cleanInlineMarkdown(
-                flag.suggestion,
-              )}`,
-              contentWidth - 28,
-            ) as string[];
-
-          const cardHeight =
-            50 +
-            issueLines.length *
-              13 +
-            suggestionLines.length *
-              13;
-
-          ensureSpace(
-            cardHeight + 12,
-          );
-
-          doc.setFillColor(
-            249,
-            249,
-            250,
-          );
-
-          doc.setDrawColor(
-            border[0],
-            border[1],
-            border[2],
-          );
-
-          doc.roundedRect(
-            margin,
-            y,
-            contentWidth,
-            cardHeight,
-            6,
-            6,
-            "FD",
-          );
-
-          doc.setFillColor(
-            severityColor[0],
-            severityColor[1],
-            severityColor[2],
-          );
-
-          doc.roundedRect(
-            margin,
-            y,
-            5,
-            cardHeight,
-            3,
-            3,
-            "F",
-          );
-
-          doc.setFont(
-            "helvetica",
-            "bold",
-          );
-
-          doc.setFontSize(9);
-
-          doc.setTextColor(
-            severityColor[0],
-            severityColor[1],
-            severityColor[2],
-          );
-
-          doc.text(
-            `${flag.severity.toUpperCase()}  •  CLAUSE ${flag.clause_id}`,
-            margin + 16,
-            y + 19,
-          );
-
-          let cardY =
-            y + 39;
-
-          doc.setFont(
-            "helvetica",
-            "normal",
-          );
-
-          doc.setFontSize(9);
-
-          doc.setTextColor(
-            navy[0],
-            navy[1],
-            navy[2],
-          );
-
-          issueLines.forEach(
-            (
-              currentLine: string,
-            ) => {
-              doc.text(
-                currentLine,
-                margin + 16,
-                cardY,
-              );
-
-              cardY += 13;
-            },
-          );
-
-          cardY += 4;
-
-          doc.setFont(
-            "helvetica",
-            "bold",
-          );
-
-          doc.setFontSize(
-            8.5,
-          );
-
-          doc.setTextColor(
-            muted[0],
-            muted[1],
-            muted[2],
-          );
-
-          suggestionLines.forEach(
-            (
-              currentLine: string,
-            ) => {
-              doc.text(
-                currentLine,
-                margin + 16,
-                cardY,
-              );
-
-              cardY += 13;
-            },
-          );
-
-          y +=
-            cardHeight + 12;
-        },
-      );
-    }
-
-    // ============================================================
-    // PROPOSAL
-    // ============================================================
-
-    doc.addPage();
-    y = 64;
-
-    const sourceLines =
-      draftText
-        .replace(/\r/g, "")
-        .split("\n");
-
-    let index = 0;
-
-    while (
-      index <
-      sourceLines.length
-    ) {
-      const currentLine =
-        sourceLines[index] ??
-        "";
-
-      const line =
-        currentLine.trim();
-
-      if (!line) {
-        y += 7;
-        index += 1;
-        continue;
-      }
-
-      // Horizontal rule
-      if (
-        /^---+$/.test(
-          line,
-        )
-      ) {
-        ensureSpace(12);
-
-        doc.setDrawColor(
-          border[0],
-          border[1],
-          border[2],
-        );
-
-        doc.setLineWidth(0.6);
-
-        doc.line(
-          margin,
-          y,
-          pageWidth - margin,
-          y,
-        );
-
-        y += 14;
-        index += 1;
-        continue;
-      }
-
-      // H1
-      if (
-        line.startsWith(
-          "# ",
-        )
-      ) {
-        addHeading(
-          cleanInlineMarkdown(
-            line.slice(2),
-          ),
-          20,
-          8,
-          18,
-        );
-
-        index += 1;
-        continue;
-      }
-
-      // H2
-      if (
-        line.startsWith(
-          "## ",
-        )
-      ) {
-        addHeading(
-          cleanInlineMarkdown(
-            line.slice(3),
-          ),
-          15,
-          14,
-          14,
-        );
-
-        index += 1;
-        continue;
-      }
-
-      // H3
-      if (
-        line.startsWith(
-          "### ",
-        )
-      ) {
-        ensureSpace(28);
-
-        y += 10;
-
-        doc.setFont(
-          "helvetica",
-          "bold",
-        );
-
-        doc.setFontSize(12);
-
-        doc.setTextColor(
-          navy[0],
-          navy[1],
-          navy[2],
-        );
-
-        doc.text(
-          cleanInlineMarkdown(
-            line.slice(4),
-          ),
-          margin,
-          y,
-        );
-
-        y += 20;
-        index += 1;
-        continue;
-      }
-
-      // Markdown table
-      const nextLine =
-        sourceLines[index + 1]
-          ?.trim() ?? "";
-
-      if (
-        line.startsWith(
-          "|",
-        ) &&
-        line.endsWith("|") &&
-        nextLine.startsWith(
-          "|",
-        )
-      ) {
-        const tableLines: string[] =
-          [];
-
-        while (
-          index <
-          sourceLines.length
-        ) {
-          const tableLine =
-            sourceLines[index]
-              ?.trim() ?? "";
-
-          if (
-            !tableLine.startsWith(
-              "|",
-            ) ||
-            !tableLine.endsWith(
-              "|",
-            )
-          ) {
-            break;
-          }
-
-          tableLines.push(
-            tableLine,
-          );
-
-          index += 1;
-        }
-
-        const headerLine =
-          tableLines[0];
-
-        if (
-          headerLine !==
-            undefined &&
-          tableLines.length >=
-            2
-        ) {
-          const headers =
-            parseTableRow(
-              headerLine,
-            );
-
-          const body =
-            tableLines
-              .slice(1)
-              .filter(
-                (
-                  tableLine,
-                ) =>
-                  !isTableSeparator(
-                    tableLine,
-                  ),
-              )
-              .map(
-                parseTableRow,
-              );
-
-          ensureSpace(80);
-
-          autoTable(doc, {
-            startY: y,
-
-            margin: {
-              left: margin,
-              right: margin,
-            },
-
-            tableWidth:
-              contentWidth,
-
-            head: [headers],
-
-            body,
-
-            theme: "grid",
-
-            styles: {
-              font: "helvetica",
-              fontSize: 7.5,
-              cellPadding: 5,
-              textColor:
-                navy as RGB,
-              lineColor:
-                border as RGB,
-              lineWidth: 0.5,
-              overflow:
-                "linebreak",
-              valign:
-                "top",
-            },
-
-            headStyles: {
-              fillColor:
-                navy as RGB,
-              textColor:
-                [255, 255, 255] as RGB,
-              fontStyle: "bold",
-              fontSize: 7.5,
-            },
-
-            alternateRowStyles: {
-              fillColor:
-                [249, 250, 251] as RGB,
-            },
-          });
-
-          const autoTableDocument =
-            doc as jsPDF & {
-              lastAutoTable?: {
-                finalY?: number;
-              };
-            };
-
-          const finalY =
-            autoTableDocument
-              .lastAutoTable
-              ?.finalY;
-
-          y =
-            typeof finalY ===
-            "number"
-              ? finalY + 18
-              : y + 18;
-        }
-
-        continue;
-      }
-
-      // Bullets
-      if (
-        /^[-*]\s+/.test(
-          line,
-        )
-      ) {
-        addBullet(
-          cleanInlineMarkdown(
-            line.replace(
-              /^[-*]\s+/,
-              "",
-            ),
-          ),
-        );
-
-        index += 1;
-        continue;
-      }
-
-      // Numbered list
-      if (
-        /^\d+\.\s+/.test(
-          line,
-        )
-      ) {
-        const match =
-          line.match(
-            /^(\d+)\.\s+(.*)$/,
-          );
-
-        const number =
-          match?.[1];
-
-        const numberedText =
-          match?.[2];
-
-        if (
-          number !==
-            undefined &&
-          numberedText !==
-            undefined
-        ) {
-          ensureSpace(24);
-
-          doc.setFont(
-            "helvetica",
-            "bold",
-          );
-
-          doc.setFontSize(10);
-
-          doc.setTextColor(
-            navy[0],
-            navy[1],
-            navy[2],
-          );
-
-          doc.text(
-            `${number}.`,
-            margin + 2,
-            y,
-          );
-
-          const numberedLines =
-            doc.splitTextToSize(
-              cleanInlineMarkdown(
-                numberedText,
-              ),
-              contentWidth - 18,
-            ) as string[];
-
-          const lineHeight =
-            14;
-
-          numberedLines.forEach(
-            (
-              numberedLine: string,
-              numberedIndex: number,
-            ) => {
-              if (
-                numberedIndex > 0
-              ) {
-                ensureSpace(
-                  lineHeight,
-                );
-              }
-
-              doc.setFont(
-                "helvetica",
-                "normal",
-              );
-
-              doc.text(
-                numberedLine,
-                margin + 16,
-                y,
-              );
-
-              y += lineHeight;
-            },
-          );
-
-          y += 4;
-        }
-
-        index += 1;
-        continue;
-      }
-
-      // Normal paragraph
-      addWrappedText(
-        cleanInlineMarkdown(line),
-        10,
-        6,
-      );
-
-      index += 1;
-    }
-
-    // ============================================================
-    // HEADERS / FOOTERS
-    // ============================================================
-
-    const pageCount =
-      doc.getNumberOfPages();
-
-    for (
-      let page = 1;
-      page <= pageCount;
-      page += 1
-    ) {
-      doc.setPage(page);
-
-      if (page > 1) {
-        doc.setDrawColor(
-          border[0],
-          border[1],
-          border[2],
-        );
-
-        doc.setLineWidth(0.5);
-
-        doc.line(
-          margin,
-          34,
-          pageWidth - margin,
-          34,
-        );
-
-        doc.setFont(
-          "helvetica",
-          "normal",
-        );
-
-        doc.setFontSize(8);
-
-        doc.setTextColor(
-          muted[0],
-          muted[1],
-          muted[2],
-        );
-
-        doc.text(
-          "BidBot • Proposal Response",
-          margin,
-          26,
-        );
-      }
-
-      doc.setDrawColor(
-        border[0],
-        border[1],
-        border[2],
-      );
-
-      doc.line(
-        margin,
-        pageHeight - 38,
-        pageWidth - margin,
-        pageHeight - 38,
-      );
-
-      doc.setFont(
-        "helvetica",
-        "normal",
-      );
-
-      doc.setFontSize(8);
-
-      doc.setTextColor(
-        muted[0],
-        muted[1],
-        muted[2],
-      );
-
-      doc.text(
-        "Northwind Digital",
-        margin,
-        pageHeight - 22,
-      );
-
-      doc.text(
-        `Page ${page} of ${pageCount}`,
-        pageWidth - margin,
-        pageHeight - 22,
-        {
-          align: "right",
-        },
-      );
-    }
-
-    doc.save(
-      "BidBot-Proposal.pdf",
-    );
-
-    setApproved(true);
   };
 
-  // ------------------------------------------------------------
-  // AGENT PIPELINE
-  // ------------------------------------------------------------
+  const handleDrop = (
+    event: React.DragEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    setDrag(false);
+
+    handleFileSelected(
+      event.dataTransfer.files?.[0] ??
+        null,
+    );
+  };
 
   const runAgentSwarm = async () => {
     if (!selectedFile) {
       alert(
-        "Please upload an RFP Document first.",
+        "Please upload an RFP document first.",
       );
       return;
     }
@@ -1338,25 +283,25 @@ export function Dashboard({
     setRunning(true);
     setLines([]);
     setScore(0);
-    setInitialScore(0);
+    setInitialScore(null);
     setDraftText("");
     setCriticFlags([]);
     setEvidence([]);
     setRequirements([]);
+    setProjectTitle("");
     setApproved(false);
     setActiveTab("proposal");
 
     try {
-      // ==========================================================
+      // ======================================================
       // AGENT 1 — PARSER
-      // ==========================================================
+      // ======================================================
 
       setActiveNode(0);
 
-      setLines((prev) => [
-        ...prev,
-        "✦ [Parser Node] Ingesting PDF and extracting constraints...",
-      ]);
+      addLine(
+        "✦ [Agent 1 • Parser] Ingesting PDF and extracting constraints...",
+      );
 
       const formData =
         new FormData();
@@ -1366,8 +311,8 @@ export function Dashboard({
         selectedFile,
       );
 
-      const parseRes =
-        await fetch(
+      const parsedData =
+        await fetchJson<ParserResponse>(
           `${API_BASE_URL}/api/1-parse-rfp`,
           {
             method: "POST",
@@ -1375,59 +320,41 @@ export function Dashboard({
           },
         );
 
-      if (!parseRes.ok) {
-        let errorMessage =
-          `RFP parsing failed: ${parseRes.status}`;
-
-        try {
-          const errorData =
-            await parseRes.json();
-
-          if (
-            typeof errorData.detail ===
-            "string"
-          ) {
-            errorMessage =
-              errorData.detail;
-          }
-        } catch {
-          // Keep fallback.
-        }
-
-        throw new Error(
-          errorMessage,
-        );
-      }
-
-      const parsedData =
-        await parseRes.json();
-
-      const parsedRequirements: Requirement[] =
+      const parsedRequirements =
         parsedData.requirements ||
         [];
+
+      setProjectTitle(
+        parsedData.project_title ||
+          "",
+      );
 
       setRequirements(
         parsedRequirements,
       );
 
-      setLines((prev) => [
-        ...prev,
-        `✦ [Parser Node] ✓ Extracted ${parsedRequirements.length} mandatory rules from "${parsedData.project_title}"`,
-      ]);
+      addLine(
+        `✓ [Agent 1 • Parser] Extracted ${parsedRequirements.length} mandatory rule${
+          parsedRequirements.length ===
+          1
+            ? ""
+            : "s"
+        } from "${parsedData.project_title}".`,
+        "success",
+      );
 
-      // ==========================================================
-      // AGENT 2 — RETRIEVER
-      // ==========================================================
+      // ======================================================
+      // AGENT 2 — EVIDENCE RETRIEVER
+      // ======================================================
 
       setActiveNode(1);
 
-      setLines((prev) => [
-        ...prev,
-        "✦ [Evidence Retriever] Searching verified company evidence...",
-      ]);
+      addLine(
+        "✦ [Agent 2 • Evidence Retriever] Searching verified company evidence...",
+      );
 
-      const retrievalRes =
-        await fetch(
+      const evidenceData =
+        await fetchJson<EvidenceResponse>(
           `${API_BASE_URL}/api/2-retrieve-context`,
           {
             method: "POST",
@@ -1442,42 +369,34 @@ export function Dashboard({
           },
         );
 
-      if (!retrievalRes.ok) {
-        throw new Error(
-          `Evidence retrieval failed: ${retrievalRes.status}`,
-        );
-      }
-
-      const retrievalData =
-        await retrievalRes.json();
-
-      const retrievedEvidence: EvidenceRecord[] =
-        retrievalData.evidence ||
+      const retrievedEvidence =
+        evidenceData.evidence ||
         [];
 
       setEvidence(
         retrievedEvidence,
       );
 
-      setLines((prev) => [
-        ...prev,
-        `✦ [Evidence Retriever] ✓ Found ${retrievedEvidence.length} relevant verified evidence records.`,
-      ]);
+      addLine(
+        `✓ [Agent 2 • Evidence Retriever] Retrieved ${retrievedEvidence.length} verified evidence records.`,
+        "success",
+      );
 
-      // ==========================================================
-      // AGENT 3 — DRAFT
-      // ==========================================================
+      // ======================================================
+      // AGENT 3 — INITIAL DRAFT
+      // ======================================================
 
       setActiveNode(2);
 
-      setLines((prev) => [
-        ...prev,
-        "✦ [Drafting LLM] Writing evidence-grounded proposal draft...",
-      ]);
+      addLine(
+        "✦ [Agent 3 • Proposal Drafter] Writing evidence-backed proposal...",
+      );
 
-      const draftRes =
-        await fetch(
-          `${API_BASE_URL}/api/2-draft-proposal`,
+      const draftData =
+        await fetchJson<{
+          draft: string;
+        }>(
+          `${API_BASE_URL}/api/3-draft-proposal`,
           {
             method: "POST",
             headers: {
@@ -1493,38 +412,31 @@ export function Dashboard({
           },
         );
 
-      if (!draftRes.ok) {
-        throw new Error(
-          `Proposal drafting failed: ${draftRes.status}`,
-        );
-      }
-
-      const draftData =
-        await draftRes.json();
+      const initialDraft =
+        draftData.draft || "";
 
       setDraftText(
-        draftData.draft,
+        initialDraft,
       );
 
-      setLines((prev) => [
-        ...prev,
-        "✦ [Drafting LLM] ✓ Draft complete. Initiating adversarial review.",
-      ]);
+      addLine(
+        "✓ [Agent 3 • Proposal Drafter] Initial proposal complete.",
+        "success",
+      );
 
-      // ==========================================================
-      // AGENT 4 — FIRST CRITIC
-      // ==========================================================
+      // ======================================================
+      // AGENT 4 — INITIAL CRITIC
+      // ======================================================
 
       setActiveNode(3);
 
-      setLines((prev) => [
-        ...prev,
-        "✦ [Critic Engine] Adversarial compliance audit started...",
-      ]);
+      addLine(
+        "✦ [Agent 4 • Adversarial Critic] Auditing every mandatory clause...",
+      );
 
-      const criticRes =
-        await fetch(
-          `${API_BASE_URL}/api/3-critic-review`,
+      const firstCritic =
+        await fetchJson<CriticResponse>(
+          `${API_BASE_URL}/api/4-critic-review`,
           {
             method: "POST",
             headers: {
@@ -1534,52 +446,62 @@ export function Dashboard({
             body: JSON.stringify({
               requirements:
                 parsedRequirements,
-              draft:
-                draftData.draft,
+              evidence:
+                retrievedEvidence,
+              draft: initialDraft,
             }),
           },
         );
 
-      if (!criticRes.ok) {
-        throw new Error(
-          `Compliance review failed: ${criticRes.status}`,
-        );
-      }
-
-      let criticData =
-        await criticRes.json();
-
       const firstScore =
-        criticData.compliance_score ||
+        firstCritic.compliance_score ??
         0;
 
       setInitialScore(
         firstScore,
       );
 
-      setLines((prev) => [
-        ...prev,
-        `✦ [Critic Engine] ${criticData.flags?.length || 0} compliance risks identified.`,
-      ]);
+      setScore(
+        firstScore,
+      );
 
-      // ==========================================================
-      // ONE REVISION CYCLE
-      // ==========================================================
+      addLine(
+        `✓ [Agent 4 • Adversarial Critic] Initial compliance score: ${firstScore}/100.`,
+        "success",
+      );
+
+      let finalCritic =
+        firstCritic;
+
+      // ======================================================
+      // CRITIC → REVISION LOOP
+      // ======================================================
 
       if (
-        criticData.flags &&
-        criticData.flags.length > 0
+        firstCritic.flags.length >
+        0
       ) {
+        addLine(
+          `⚠ [Agent 4 • Adversarial Critic] Found ${firstCritic.flags.length} blocking compliance risk${
+            firstCritic.flags.length ===
+            1
+              ? ""
+              : "s"
+          }.`,
+          "warning",
+        );
+
         setActiveNode(2);
 
-        setLines((prev) => [
-          ...prev,
-          "✦ [Drafting LLM] Critic feedback received. Revising proposal...",
-        ]);
+        addLine(
+          "✦ [Agent 3 • Proposal Drafter] Revising draft against critic findings...",
+        );
 
-        const revisionRes =
-          await fetch(
-            `${API_BASE_URL}/api/2-draft-proposal`,
+        const revisionData =
+          await fetchJson<{
+            draft: string;
+          }>(
+            `${API_BASE_URL}/api/3-draft-proposal`,
             {
               method: "POST",
               headers: {
@@ -1592,40 +514,39 @@ export function Dashboard({
                 evidence:
                   retrievedEvidence,
                 previous_draft:
-                  draftData.draft,
+                  initialDraft,
                 critic_feedback:
-                  criticData.flags,
+                  firstCritic.flags,
               }),
             },
           );
 
-        if (!revisionRes.ok) {
-          throw new Error(
-            `Proposal revision failed: ${revisionRes.status}`,
-          );
-        }
-
-        const revisionData =
-          await revisionRes.json();
+        const revisedDraft =
+          revisionData.draft ||
+          "";
 
         setDraftText(
-          revisionData.draft,
+          revisedDraft,
         );
 
-        setLines((prev) => [
-          ...prev,
-          "✦ [Drafting LLM] ✓ Revision complete. Re-running compliance audit...",
-        ]);
+        addLine(
+          "✓ [Agent 3 • Proposal Drafter] Revision complete.",
+          "success",
+        );
 
-        // ========================================================
-        // SECOND CRITIC
-        // ========================================================
+        // ====================================================
+        // AGENT 4 — RE-CRITIC
+        // ====================================================
 
         setActiveNode(3);
 
-        const secondCriticRes =
-          await fetch(
-            `${API_BASE_URL}/api/3-critic-review`,
+        addLine(
+          "✦ [Agent 4 • Adversarial Critic] Re-auditing revised proposal...",
+        );
+
+        finalCritic =
+          await fetchJson<CriticResponse>(
+            `${API_BASE_URL}/api/4-critic-review`,
             {
               method: "POST",
               headers: {
@@ -1635,637 +556,1682 @@ export function Dashboard({
               body: JSON.stringify({
                 requirements:
                   parsedRequirements,
-                draft:
-                  revisionData.draft,
+                evidence:
+                  retrievedEvidence,
+                draft: revisedDraft,
               }),
             },
           );
 
-        if (!secondCriticRes.ok) {
-          throw new Error(
-            `Re-review failed: ${secondCriticRes.status}`,
-          );
-        }
+        setScore(
+          finalCritic.compliance_score ??
+            0,
+        );
 
-        criticData =
-          await secondCriticRes.json();
-
-        setLines((prev) => [
-          ...prev,
-          `✦ [Critic Engine] ✓ Re-audit complete. ${
-            criticData.flags?.length ||
-            0
-          } risks remain.`,
-        ]);
+        addLine(
+          `✓ [Agent 4 • Adversarial Critic] Final compliance score: ${finalCritic.compliance_score}/100.`,
+          "success",
+        );
+      } else {
+        addLine(
+          "✓ [Agent 4 • Adversarial Critic] No mandatory compliance risks found.",
+          "success",
+        );
       }
 
-      // ==========================================================
-      // FINAL RESULT
-      // ==========================================================
+      setCriticFlags(
+        finalCritic.flags || [],
+      );
 
       const finalScore =
-        criticData.compliance_score ||
+        finalCritic.compliance_score ??
         0;
 
       const improvement =
-        finalScore - firstScore;
+        finalScore -
+        firstScore;
 
-      setCriticFlags(
-        criticData.flags || [],
-      );
-
-      setScore(finalScore);
-
-      if (
-        criticData.flags &&
-        criticData.flags.length > 0
-      ) {
-        setLines((prev) => [
-          ...prev,
-          `✦ [Critic Engine] ✗ ${criticData.flags.length} compliance risks remain after revision.`,
-        ]);
+      if (improvement > 0) {
+        addLine(
+          `✓ [System] Swarm complete. Score improved by +${improvement} points.`,
+          "success",
+        );
       } else {
-        setLines((prev) => [
-          ...prev,
-          "✦ [Critic Engine] ✓ Audit passed cleanly.",
-        ]);
+        addLine(
+          `✓ [System] Swarm complete. Final score: ${finalScore}/100.`,
+          "success",
+        );
       }
 
-      setLines((prev) => [
-        ...prev,
-        `✦ [System] Swarm complete. Score: ${finalScore}/100.` +
-          (improvement !== 0
-            ? ` Improvement: ${
-                improvement > 0
-                  ? "+"
-                  : ""
-              }${improvement} points.`
-            : "") +
-          " Awaiting human sign-off.",
-      ]);
+      if (
+        finalCritic.flags?.length
+      ) {
+        addLine(
+          `⚠ [System] ${finalCritic.flags.length} issue${
+            finalCritic.flags.length ===
+            1
+              ? ""
+              : "s"
+          } remain. Human review required.`,
+          "warning",
+        );
+      } else {
+        addLine(
+          "✓ [System] Automated audit passed. Human sign-off required before export.",
+          "success",
+        );
+      }
 
       setActiveNode(4);
+      setActiveTab(
+        "proposal",
+      );
     } catch (error) {
       console.error(
         "Agent Swarm Failed:",
         error,
       );
 
-      setLines((prev) => [
-        ...prev,
-        `✦ [ERROR] ${
-          error instanceof Error
-            ? error.message
-            : "Agent pipeline failed."
-        }`,
-      ]);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unexpected pipeline error.";
+
+      addLine(
+        `✕ [ERROR] ${message}`,
+        "error",
+      );
     } finally {
       setRunning(false);
     }
   };
 
-  // ------------------------------------------------------------
-  // RENDER
-  // ------------------------------------------------------------
+  // ============================================================
+  // PDF EXPORT
+  // ============================================================
+
+  const exportProposal = () => {
+    if (
+      !draftText ||
+      !approved
+    ) {
+      return;
+    }
+
+    const doc = new jsPDF({
+      unit: "pt",
+      format: "a4",
+    });
+
+    const pageWidth =
+      doc.internal.pageSize.getWidth();
+
+    const pageHeight =
+      doc.internal.pageSize.getHeight();
+
+    const margin = 48;
+
+    type RGB = [
+      number,
+      number,
+      number,
+    ];
+
+    const ink: RGB = [
+      20, 24, 30,
+    ];
+
+    const muted: RGB = [
+      100, 108, 118,
+    ];
+
+    const accent: RGB = [
+      20, 120, 100,
+    ];
+
+    const light: RGB = [
+      240, 243, 246,
+    ];
+
+    let y = 48;
+
+    const addFooter = () => {
+      const pageNumber =
+        doc.getCurrentPageInfo()
+          .pageNumber;
+
+      doc.setFont(
+        "helvetica",
+        "normal",
+      );
+
+      doc.setFontSize(8);
+
+      doc.setTextColor(
+        ...muted,
+      );
+
+      doc.text(
+        `BidBot • ${
+          projectTitle ||
+          "Proposal Response"
+        }`,
+        margin,
+        pageHeight - 24,
+      );
+
+      doc.text(
+        `Page ${pageNumber}`,
+        pageWidth - margin,
+        pageHeight - 24,
+        {
+          align: "right",
+        },
+      );
+    };
+
+    const ensureSpace = (
+      required: number,
+    ) => {
+      if (
+        y + required >
+        pageHeight - 58
+      ) {
+        addFooter();
+        doc.addPage();
+        y = 52;
+      }
+    };
+
+    const writeWrapped = (
+      text: string,
+      fontSize = 10,
+      lineHeight = 15,
+      indent = 0,
+    ) => {
+      doc.setFontSize(
+        fontSize,
+      );
+
+      const lines =
+        doc.splitTextToSize(
+          text,
+          pageWidth -
+            margin * 2 -
+            indent,
+        );
+
+      for (
+        const line of lines
+      ) {
+        ensureSpace(
+          lineHeight,
+        );
+
+        doc.text(
+          line,
+          margin + indent,
+          y,
+        );
+
+        y +=
+          lineHeight;
+      }
+    };
+
+    const flushTable = (
+      rows: string[][],
+    ) => {
+      if (
+        rows.length <
+        2
+      ) {
+        return;
+      }
+
+      const header =
+        rows[0] ?? [];
+
+      const body =
+        rows
+          .slice(2)
+          .map((row) =>
+            row.map(
+              (cell) =>
+                cell.trim(),
+            ),
+          );
+
+      ensureSpace(
+        100,
+      );
+
+      autoTable(
+        doc,
+        {
+          startY: y,
+          head: [
+            header.map(
+              (cell) =>
+                cell
+                  .replace(
+                    /^\|/,
+                    "",
+                  )
+                  .replace(
+                    /\|$/,
+                    "",
+                  )
+                  .trim(),
+            ),
+          ],
+          body,
+          margin: {
+            left: margin,
+            right: margin,
+          },
+          styles: {
+            font:
+              "helvetica",
+            fontSize: 8,
+            cellPadding: 5,
+            textColor:
+              ink,
+            overflow:
+              "linebreak",
+          },
+          headStyles: {
+            fontStyle:
+              "bold",
+          },
+          alternateRowStyles:
+            {
+              fillColor:
+                light,
+            },
+        },
+      );
+
+      const finalY =
+        (
+          doc as unknown as {
+            lastAutoTable?: {
+              finalY?: number;
+            };
+          }
+        )
+          .lastAutoTable
+          ?.finalY;
+
+      y =
+        (finalY ?? y) +
+        18;
+    };
+
+    // ========================================================
+    // COVER
+    // ========================================================
+
+    doc.setFillColor(
+      ...ink,
+    );
+
+    doc.rect(
+      0,
+      0,
+      pageWidth,
+      150,
+      "F",
+    );
+
+    doc.setTextColor(
+      255,
+      255,
+      255,
+    );
+
+    doc.setFont(
+      "helvetica",
+      "bold",
+    );
+
+    doc.setFontSize(
+      24,
+    );
+
+    doc.text(
+      "BidBot",
+      margin,
+      58,
+    );
+
+    doc.setFont(
+      "helvetica",
+      "normal",
+    );
+
+    doc.setFontSize(
+      11,
+    );
+
+    doc.text(
+      "Evidence-backed RFP Proposal Response",
+      margin,
+      80,
+    );
+
+    doc.setFontSize(
+      9,
+    );
+
+    doc.setTextColor(
+      210,
+      216,
+      223,
+    );
+
+    doc.text(
+      projectTitle ||
+        "RFP Proposal",
+      margin,
+      110,
+    );
+
+    y = 190;
+
+    // ========================================================
+    // SCORE CARD
+    // ========================================================
+
+    ensureSpace(
+      92,
+    );
+
+    doc.setFillColor(
+      ...light,
+    );
+
+    doc.roundedRect(
+      margin,
+      y,
+      pageWidth -
+        margin * 2,
+      76,
+      8,
+      8,
+      "F",
+    );
+
+    doc.setTextColor(
+      ...muted,
+    );
+
+    doc.setFont(
+      "helvetica",
+      "bold",
+    );
+
+    doc.setFontSize(
+      9,
+    );
+
+    doc.text(
+      "FINAL COMPLIANCE SCORE",
+      margin + 16,
+      y + 22,
+    );
+
+    doc.setTextColor(
+      ...accent,
+    );
+
+    doc.setFontSize(
+      24,
+    );
+
+    doc.text(
+      `${score}/100`,
+      margin + 16,
+      y + 52,
+    );
+
+    doc.setTextColor(
+      ...ink,
+    );
+
+    doc.setFont(
+      "helvetica",
+      "normal",
+    );
+
+    doc.setFontSize(
+      9,
+    );
+
+    doc.text(
+      criticFlags.length ===
+      0
+        ? "Automated audit passed"
+        : `${criticFlags.length} compliance risk${
+            criticFlags.length ===
+            1
+              ? ""
+              : "s"
+          } flagged`,
+      pageWidth -
+        margin -
+        16,
+      y + 38,
+      {
+        align: "right",
+      },
+    );
+
+    y += 108;
+
+    // ========================================================
+    // COMPLIANCE REVIEW
+    // ========================================================
+
+    if (
+      criticFlags.length >
+      0
+    ) {
+      ensureSpace(
+        60,
+      );
+
+      doc.setTextColor(
+        ...ink,
+      );
+
+      doc.setFont(
+        "helvetica",
+        "bold",
+      );
+
+      doc.setFontSize(
+        15,
+      );
+
+      doc.text(
+        "Compliance Review",
+        margin,
+        y,
+      );
+
+      y += 22;
+
+      for (
+        const flag of criticFlags
+      ) {
+        ensureSpace(
+          88,
+        );
+
+        const cardTop =
+          y;
+
+        doc.setFillColor(
+          ...light,
+        );
+
+        doc.roundedRect(
+          margin,
+          cardTop,
+          pageWidth -
+            margin * 2,
+          72,
+          6,
+          6,
+          "F",
+        );
+
+        doc.setTextColor(
+          ...ink,
+        );
+
+        doc.setFont(
+          "helvetica",
+          "bold",
+        );
+
+        doc.setFontSize(
+          9,
+        );
+
+        doc.text(
+          `${flag.severity.toUpperCase()} — Clause ${flag.clause_id}`,
+          margin + 12,
+          cardTop + 17,
+        );
+
+        doc.setFont(
+          "helvetica",
+          "normal",
+        );
+
+        doc.setFontSize(
+          8.5,
+        );
+
+        const issueLines =
+          doc.splitTextToSize(
+            flag.issue,
+            pageWidth -
+              margin * 2 -
+              24,
+          );
+
+        doc.text(
+          issueLines.slice(
+            0,
+            2,
+          ),
+          margin + 12,
+          cardTop + 33,
+        );
+
+        const suggestionLines =
+          doc.splitTextToSize(
+            `Recommendation: ${flag.suggestion}`,
+            pageWidth -
+              margin * 2 -
+              24,
+          );
+
+        doc.setTextColor(
+          ...muted,
+        );
+
+        doc.text(
+          suggestionLines.slice(
+            0,
+            2,
+          ),
+          margin + 12,
+          cardTop + 54,
+        );
+
+        y =
+          cardTop + 86;
+      }
+    }
+
+    // ========================================================
+    // PROPOSAL BODY
+    // ========================================================
+
+    ensureSpace(
+      70,
+    );
+
+    doc.setTextColor(
+      ...ink,
+    );
+
+    doc.setFont(
+      "helvetica",
+      "bold",
+    );
+
+    doc.setFontSize(
+      18,
+    );
+
+    doc.text(
+      "Proposal Response",
+      margin,
+      y,
+    );
+
+    y += 28;
+
+    const rawLines =
+      draftText.split(
+        "\n",
+      );
+
+    let tableBuffer:
+      string[][] = [];
+
+    for (
+      let index = 0;
+      index < rawLines.length;
+      index++
+    ) {
+      const originalLine =
+        rawLines[index] ??
+        "";
+
+      const trimmed =
+        originalLine.trim();
+
+      if (
+        trimmed.startsWith(
+          "|",
+        )
+      ) {
+        tableBuffer.push(
+          trimmed
+            .split("|")
+            .filter(
+              (_, i, arr) =>
+                i !== 0 &&
+                i !==
+                  arr.length -
+                    1,
+            ),
+        );
+
+        continue;
+      }
+
+      if (
+        tableBuffer.length >
+        0
+      ) {
+        flushTable(
+          tableBuffer,
+        );
+        tableBuffer = [];
+      }
+
+      if (!trimmed) {
+        y += 6;
+        continue;
+      }
+
+      if (
+        trimmed.startsWith(
+          "### ",
+        )
+      ) {
+        ensureSpace(
+          30,
+        );
+
+        doc.setTextColor(
+          ...ink,
+        );
+
+        doc.setFont(
+          "helvetica",
+          "bold",
+        );
+
+        doc.setFontSize(
+          11,
+        );
+
+        writeWrapped(
+          trimmed.slice(
+            4,
+          ),
+          11,
+          15,
+        );
+
+        y += 3;
+        continue;
+      }
+
+      if (
+        trimmed.startsWith(
+          "## ",
+        )
+      ) {
+        ensureSpace(
+          32,
+        );
+
+        doc.setTextColor(
+          ...ink,
+        );
+
+        doc.setFont(
+          "helvetica",
+          "bold",
+        );
+
+        doc.setFontSize(
+          13,
+        );
+
+        writeWrapped(
+          trimmed.slice(
+            3,
+          ),
+          13,
+          17,
+        );
+
+        y += 4;
+        continue;
+      }
+
+      if (
+        trimmed.startsWith(
+          "# ",
+        )
+      ) {
+        ensureSpace(
+          36,
+        );
+
+        doc.setTextColor(
+          ...ink,
+        );
+
+        doc.setFont(
+          "helvetica",
+          "bold",
+        );
+
+        doc.setFontSize(
+          17,
+        );
+
+        writeWrapped(
+          trimmed.slice(
+            2,
+          ),
+          17,
+          21,
+        );
+
+        y += 5;
+        continue;
+      }
+
+      if (
+        /^[-*]\s/.test(
+          trimmed,
+        )
+      ) {
+        writeWrapped(
+          trimmed.replace(
+            /^[-*]\s+/,
+            "• ",
+          ),
+          9.5,
+          14,
+        );
+
+        continue;
+      }
+
+      if (
+        /^\d+\.\s/.test(
+          trimmed,
+        )
+      ) {
+        writeWrapped(
+          trimmed,
+          9.5,
+          14,
+        );
+
+        continue;
+      }
+
+      const cleaned =
+        trimmed
+          .replace(
+            /\*\*(.*?)\*\*/g,
+            "$1",
+          )
+          .replace(
+            /\*(.*?)\*/g,
+            "$1",
+          )
+          .replace(
+            /`([^`]+)`/g,
+            "$1",
+          );
+
+      writeWrapped(
+        cleaned,
+        9.5,
+        14,
+      );
+    }
+
+    if (
+      tableBuffer.length >
+      0
+    ) {
+      flushTable(
+        tableBuffer,
+      );
+    }
+
+    addFooter();
+
+    doc.save(
+      "BidBot-Proposal.pdf",
+    );
+  };
+
+  const improvement =
+    initialScore !== null
+      ? score -
+        initialScore
+      : 0;
 
   return (
-    <div className="flex h-screen flex-col">
-      {/* ========================================================
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      {/* ======================================================
+          LOCAL SCROLLBAR STYLES
+      ====================================================== */}
+
+      <style>
+        {`
+          .bidbot-scroll {
+            scrollbar-width: auto;
+            scrollbar-color: #454b54 #090a0c;
+          }
+
+          .bidbot-scroll::-webkit-scrollbar {
+            width: 11px;
+            height: 11px;
+          }
+
+          .bidbot-scroll::-webkit-scrollbar-track {
+            background: #090a0c;
+          }
+
+          .bidbot-scroll::-webkit-scrollbar-thumb {
+            background: #454b54;
+            border: 3px solid #090a0c;
+            border-radius: 999px;
+            min-height: 42px;
+          }
+
+          .bidbot-scroll::-webkit-scrollbar-thumb:hover {
+            background: #626a75;
+          }
+
+          .bidbot-scroll::-webkit-scrollbar-corner {
+            background: #090a0c;
+          }
+
+          .bidbot-activity-scroll {
+            scrollbar-width: auto;
+            scrollbar-color: #3c434c #090a0c;
+          }
+
+          .bidbot-activity-scroll::-webkit-scrollbar {
+            width: 9px;
+            height: 9px;
+          }
+
+          .bidbot-activity-scroll::-webkit-scrollbar-track {
+            background: #090a0c;
+          }
+
+          .bidbot-activity-scroll::-webkit-scrollbar-thumb {
+            background: #3c434c;
+            border: 2px solid #090a0c;
+            border-radius: 999px;
+          }
+
+          .bidbot-activity-scroll::-webkit-scrollbar-thumb:hover {
+            background: #5c6570;
+          }
+
+          .proposal-content h1 {
+            margin-top: 2.25rem;
+            margin-bottom: 0.9rem;
+            font-size: 1.65rem;
+            line-height: 1.25;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+
+          .proposal-content h2 {
+            margin-top: 2.25rem;
+            margin-bottom: 0.8rem;
+            padding-bottom: 0.55rem;
+            border-bottom: 1px solid hsl(var(--border));
+            font-size: 1.25rem;
+            line-height: 1.35;
+            font-weight: 650;
+            letter-spacing: -0.015em;
+          }
+
+          .proposal-content h3 {
+            margin-top: 1.65rem;
+            margin-bottom: 0.6rem;
+            font-size: 1.02rem;
+            line-height: 1.4;
+            font-weight: 650;
+          }
+
+          .proposal-content p {
+            margin-top: 0.7rem;
+            margin-bottom: 0.7rem;
+            font-size: 0.9rem;
+            line-height: 1.85;
+          }
+
+          .proposal-content ul {
+            margin-top: 0.75rem;
+            margin-bottom: 1rem;
+            padding-left: 1.4rem;
+          }
+
+          .proposal-content ol {
+            margin-top: 0.75rem;
+            margin-bottom: 1rem;
+            padding-left: 1.45rem;
+          }
+
+          .proposal-content li {
+            margin-top: 0.35rem;
+            margin-bottom: 0.35rem;
+            padding-left: 0.25rem;
+            font-size: 0.88rem;
+            line-height: 1.7;
+          }
+
+          .proposal-content strong {
+            font-weight: 650;
+            color: hsl(var(--foreground));
+          }
+
+          .proposal-content blockquote {
+            margin: 1.25rem 0;
+            border-left: 2px solid hsl(var(--border));
+            padding-left: 1rem;
+            color: hsl(var(--muted-foreground));
+          }
+
+          .proposal-content table {
+            width: 100%;
+            margin-top: 1.25rem;
+            margin-bottom: 1.5rem;
+            border-collapse: separate;
+            border-spacing: 0;
+            overflow: hidden;
+            border: 1px solid hsl(var(--border));
+            border-radius: 8px;
+            font-size: 0.78rem;
+          }
+
+          .proposal-content thead {
+            background: hsl(var(--muted) / 0.45);
+          }
+
+          .proposal-content th {
+            border-bottom: 1px solid hsl(var(--border));
+            padding: 0.7rem 0.75rem;
+            text-align: left;
+            font-weight: 600;
+            color: hsl(var(--foreground));
+          }
+
+          .proposal-content td {
+            border-bottom: 1px solid hsl(var(--border) / 0.65);
+            padding: 0.72rem 0.75rem;
+            vertical-align: top;
+            color: hsl(var(--muted-foreground));
+            line-height: 1.6;
+          }
+
+          .proposal-content tbody tr:last-child td {
+            border-bottom: none;
+          }
+
+          .proposal-content tbody tr:nth-child(even) {
+            background: hsl(var(--muted) / 0.16);
+          }
+
+          .proposal-content hr {
+            margin: 1.75rem 0;
+            border: 0;
+            border-top: 1px solid hsl(var(--border));
+          }
+
+          .proposal-content code {
+            border-radius: 4px;
+            background: hsl(var(--muted) / 0.45);
+            padding: 0.12rem 0.3rem;
+            font-size: 0.82em;
+          }
+        `}
+      </style>
+
+      {/* ======================================================
           HEADER
-      ======================================================== */}
+      ====================================================== */}
 
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 items-center gap-4">
           <button
             onClick={onBack}
-            className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground transition hover:bg-secondary hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Back
           </button>
 
-          <span className="h-4 w-px bg-border" />
+          <span className="h-4 w-px shrink-0 bg-border" />
 
-          <nav className="flex items-center gap-1.5 text-sm">
-            <span className="text-muted-foreground">
+          <nav className="flex min-w-0 items-center gap-1.5 text-sm">
+            <span className="shrink-0 text-muted-foreground">
               Active Bids
             </span>
 
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 
-            <span className="font-medium">
+            <span className="truncate font-medium">
               {selectedFile
                 ? selectedFile.name
-                : "New Workspace"}
+                : "New Bid"}
             </span>
           </nav>
         </div>
 
-        <div className="flex items-center gap-5">
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col items-end">
-              <span className="text-xs text-muted-foreground">
-                Compliance Score
+        <div className="ml-4 flex shrink-0 items-center gap-4">
+          {initialScore !==
+            null && (
+            <div className="hidden font-mono text-xs text-muted-foreground sm:block">
+              Initial{" "}
+              <span className="text-foreground">
+                {initialScore}
               </span>
 
-              {initialScore > 0 &&
-                score > 0 &&
-                initialScore !==
-                  score && (
-                  <span
-                    className={`font-mono text-[10px] ${
-                      score >
-                      initialScore
-                        ? "text-success"
-                        : "text-destructive"
-                    }`}
-                  >
-                    Initial{" "}
-                    {initialScore}{" "}
-                    → Final{" "}
-                    {score}
-                  </span>
-                )}
-            </div>
-
-            <div className="h-1.5 w-28 overflow-hidden bg-secondary">
-              <motion.div
-                className="h-full bg-accent"
-                animate={{
-                  width: `${score}%`,
-                }}
-                transition={spring}
-              />
-            </div>
-
-            <span className="w-9 font-mono text-sm tabular-nums">
-              {score}%
-            </span>
-          </div>
-
-          <motion.button
-            whileTap={{
-              scale: 0.96,
-            }}
-            transition={spring}
-            disabled={
-              running || !draftText
-            }
-            onClick={
-              exportProposal
-            }
-            className="inline-flex items-center gap-2 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {approved ? (
-              <Check className="h-3.5 w-3.5" />
-            ) : (
-              <Download className="h-3.5 w-3.5" />
-            )}
-
-            {approved
-              ? "Approved — Exported"
-              : "Approve & Export PDF"}
-          </motion.button>
-        </div>
-      </header>
-
-      {/* ========================================================
-          THREE COLUMN WORKSPACE
-      ======================================================== */}
-
-      <div className="grid min-h-0 flex-1 grid-cols-[25%_30%_45%]">
-        {/* ======================================================
-            COLUMN 1 — INPUT
-        ====================================================== */}
-
-        <section className="flex flex-col gap-5 border-r border-border p-5">
-          <Label>Input</Label>
-
-          <label
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDrag(true);
-            }}
-            onDragLeave={() =>
-              setDrag(false)
-            }
-            onDrop={(event) => {
-              event.preventDefault();
-              setDrag(false);
-
-              const file =
-                event.dataTransfer
-                  .files[0];
-
-              if (file) {
-                handleFileSelected(
-                  file,
-                );
-              }
-            }}
-            className={`flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed px-4 py-10 text-center transition-colors ${
-              drag
-                ? "border-accent bg-secondary"
-                : "border-input hover:bg-card"
-            }`}
-          >
-            <Upload
-              className="h-5 w-5 text-muted-foreground"
-              strokeWidth={1.5}
-            />
-
-            <span className="text-sm">
-              Upload RFP (PDF)
-            </span>
-
-            <span className="text-xs text-muted-foreground">
-              Drag & drop or click
-            </span>
-
-            <input
-              type="file"
-              accept="application/pdf"
-              className="hidden"
-              onChange={(
-                event,
-              ) => {
-                const file =
-                  event.target
-                    .files?.[0];
-
-                if (file) {
-                  handleFileSelected(
-                    file,
-                  );
-                }
-              }}
-            />
-          </label>
-
-          {selectedFile && (
-            <div className="flex items-center justify-between border border-border bg-card px-3 py-2 font-mono text-xs">
-              <span className="truncate">
-                {selectedFile.name}
+              <span className="mx-1.5">
+                →
               </span>
 
-              <span className="text-success">
-                ready
-              </span>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-2">
-            <span className="text-xs text-muted-foreground">
-              Evidence Knowledge Base
-            </span>
-
-            <select className="h-9 rounded border border-input bg-card px-2 text-sm text-foreground outline-none focus:border-accent">
-              <option>
-                local://verified-evidence
-                {" "}
-                (10 records)
-              </option>
-            </select>
-          </div>
-
-          <motion.button
-            whileTap={{
-              scale: 0.97,
-            }}
-            transition={spring}
-            disabled={running}
-            onClick={
-              runAgentSwarm
-            }
-            className="mt-auto cursor-pointer rounded border border-border bg-secondary py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
-          >
-            {running
-              ? "Swarm running…"
-              : "Deploy Agent Swarm"}
-          </motion.button>
-        </section>
-
-        {/* ======================================================
-            COLUMN 2 — AGENT GRAPH + LOG
-        ====================================================== */}
-
-        <section className="flex min-h-0 flex-col border-r border-border">
-          <div className="border-b border-border p-5">
-            <Label>Agent Graph</Label>
-
-            <div className="mt-5 flex flex-col gap-2">
-              {NODES.map(
-                (node, index) => {
-                  const state =
-                    running
-                      ? index <
-                        activeNode
-                        ? "done"
-                        : index ===
-                            activeNode
-                          ? "live"
-                          : "idle"
-                      : activeNode ===
-                          4
-                        ? "done"
-                        : "idle";
-
-                  return (
-                    <div
-                      key={node}
-                    >
-                      <motion.div
-                        layout
-                        transition={
-                          spring
-                        }
-                        className={`flex items-center justify-between border px-3 py-2 font-mono text-xs ${
-                          state === "live"
-                            ? "border-accent text-foreground"
-                            : state ===
-                                "done"
-                              ? "border-border text-foreground"
-                              : "border-border text-muted-foreground"
-                        }`}
-                      >
-                        <span>
-                          [{node}]
-                        </span>
-
-                        <span
-                          className={`h-1.5 w-1.5 ${
-                            state ===
-                            "live"
-                              ? "animate-pulse bg-accent"
-                              : state ===
-                                  "done"
-                                ? "bg-success"
-                                : "bg-muted"
-                          }`}
-                        />
-                      </motion.div>
-
-                      {index <
-                        NODES.length -
-                          1 && (
-                        <div className="py-0.5 pl-4 font-mono text-xs text-muted-foreground">
-                          {index ===
-                          2
-                            ? "↕"
-                            : "↓"}
-                        </div>
-                      )}
-                    </div>
-                  );
-                },
-              )}
-            </div>
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col bg-terminal">
-            <div className="flex items-center justify-between border-b border-border px-4 py-2">
-              <span className="font-mono text-xs text-muted-foreground">
-                swarm.log
+              Final{" "}
+              <span className="text-foreground">
+                {score}
               </span>
 
-              <span
-                className={`font-mono text-xs ${
-                  running
-                    ? "text-success"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {running
-                  ? "● live"
-                  : "○ idle"}
-              </span>
-            </div>
-
-            <div
-              ref={termRef}
-              className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-6"
-            >
-              {lines.map(
-                (line, index) => (
-                  <motion.div
-                    key={index}
-                    initial={{
-                      opacity: 0,
-                      x: -6,
-                    }}
-                    animate={{
-                      opacity: 1,
-                      x: 0,
-                    }}
-                    transition={
-                      spring
-                    }
-                    className={
-                      line.includes(
-                        "✗",
-                      ) ||
-                      line.includes(
-                        "ERROR",
-                      )
-                        ? "text-destructive"
-                        : line.includes(
-                              "✓",
-                            ) ||
-                            line.includes(
-                              "Score:",
-                            ) ||
-                            line.includes(
-                              "Improvement:",
-                            )
-                          ? "text-success"
-                          : "text-muted-foreground"
-                    }
-                  >
-                    <span className="text-muted-foreground/50">
-                      {String(
-                        index + 1,
-                      ).padStart(
-                        3,
-                        "0",
-                      )}{" "}
-                    </span>
-
-                    {line}
-                  </motion.div>
-                ),
-              )}
-
-              {running && (
-                <span className="animate-pulse text-success">
-                  ▌
+              {improvement >
+                0 && (
+                <span className="ml-2 text-accent">
+                  +{improvement}
                 </span>
               )}
             </div>
+          )}
+
+          <div className="font-mono text-xs text-muted-foreground">
+            <span className="text-foreground">
+              {score}
+            </span>
+            /100
           </div>
-        </section>
+        </div>
+      </header>
 
-        {/* ======================================================
-            COLUMN 3 — WORKSPACE
-        ====================================================== */}
+      {/* ======================================================
+          BODY
+      ====================================================== */}
 
-        <section className="flex min-h-0 flex-col overflow-hidden bg-background">
-          {/* Workspace Header */}
-          <div className="flex shrink-0 items-center justify-between border-b border-border px-5">
-            <div className="flex items-center gap-1">
-              <WorkspaceTabButton
-                active={
-                  activeTab ===
-                  "proposal"
-                }
-                onClick={() =>
-                  setActiveTab(
-                    "proposal",
-                  )
-                }
-              >
-                Proposal
-              </WorkspaceTabButton>
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[360px_minmax(0,1fr)]">
+        {/* ====================================================
+            LEFT SIDEBAR
+        ==================================================== */}
 
-              <WorkspaceTabButton
-                active={
-                  activeTab ===
-                  "compliance"
-                }
-                onClick={() =>
-                  setActiveTab(
-                    "compliance",
-                  )
-                }
-              >
-                Compliance
-              </WorkspaceTabButton>
+        <aside className="flex min-h-0 flex-col border-r border-border bg-background">
+          <div className="shrink-0 border-b border-border p-5">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-accent" />
 
-              <WorkspaceTabButton
-                active={
-                  activeTab ===
-                  "evidence"
-                }
-                onClick={() =>
-                  setActiveTab(
-                    "evidence",
-                  )
-                }
-              >
-                Evidence
-              </WorkspaceTabButton>
+              <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+                BidBot Swarm
+              </span>
             </div>
 
-            <span className="font-mono text-xs text-muted-foreground">
-              {activeTab ===
-              "proposal"
-                ? draftText
-                  ? "Live Edit"
-                  : "Awaiting Swarm"
-                : activeTab ===
-                    "compliance"
-                  ? `${requirements.length} clauses`
-                  : `${evidence.length} records`}
-            </span>
+            <h1 className="mt-3 text-xl font-semibold tracking-tight">
+              RFP Workspace
+            </h1>
+
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              Evidence-backed proposal generation with adversarial compliance review.
+            </p>
           </div>
 
-          {/* ====================================================
-              PROPOSAL TAB
-          ==================================================== */}
+          <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+            {/* Upload */}
+
+            <div className="border-b border-border p-5">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                onChange={
+                  handleInputChange
+                }
+              />
+
+              <div
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setDrag(true);
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDrag(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  setDrag(false);
+                }}
+                onDrop={
+                  handleDrop
+                }
+                className={[
+                  "rounded border border-dashed p-5 transition",
+                  drag
+                    ? "border-accent bg-accent/5"
+                    : "border-border",
+                ].join(" ")}
+              >
+                <div className="flex items-start gap-3">
+                  <Upload className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">
+                      Upload RFP
+                    </p>
+
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      PDF only • maximum 10 MB
+                    </p>
+
+                    <button
+                      disabled={
+                        running
+                      }
+                      onClick={() =>
+                        fileInputRef.current?.click()
+                      }
+                      className="mt-4 inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium transition hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Choose PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {selectedFile && (
+                <div className="mt-3 flex items-center gap-2 rounded border border-border bg-card p-3">
+                  <FileText className="h-4 w-4 shrink-0 text-accent" />
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">
+                      {
+                        selectedFile.name
+                      }
+                    </p>
+
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      {(
+                        selectedFile.size /
+                        1024 /
+                        1024
+                      ).toFixed(
+                        2,
+                      )}{" "}
+                      MB
+                    </p>
+                  </div>
+
+                  <Check className="h-3.5 w-3.5 shrink-0 text-accent" />
+                </div>
+              )}
+            </div>
+
+            {/* Agent Pipeline */}
+
+            <div className="border-b border-border p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  Agent Pipeline
+                </span>
+
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {activeNode >=
+                  4
+                    ? "DONE"
+                    : running
+                      ? "RUNNING"
+                      : "READY"}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {NODES.map(
+                  (
+                    node,
+                    index,
+                  ) => {
+                    const completed =
+                      activeNode >
+                        index ||
+                      activeNode >=
+                        4;
+
+                    const active =
+                      activeNode ===
+                        index &&
+                      running;
+
+                    return (
+                      <div
+                        key={node}
+                        className="flex items-center gap-3"
+                      >
+                        <div
+                          className={[
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
+                            completed
+                              ? "border-accent bg-accent/10 text-accent"
+                              : active
+                                ? "border-accent text-accent"
+                                : "border-border text-muted-foreground",
+                          ].join(
+                            " ",
+                          )}
+                        >
+                          {completed ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : active ? (
+                            <Circle className="h-3.5 w-3.5 animate-pulse fill-current" />
+                          ) : (
+                            <span className="font-mono text-[10px]">
+                              {index +
+                                1}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="min-w-0">
+                          <p
+                            className={[
+                              "text-xs font-medium",
+                              active ||
+                              completed
+                                ? "text-foreground"
+                                : "text-muted-foreground",
+                            ].join(
+                              " ",
+                            )}
+                          >
+                            Agent{" "}
+                            {index +
+                              1}
+                          </p>
+
+                          <p className="truncate text-[11px] text-muted-foreground">
+                            {node}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  },
+                )}
+              </div>
+            </div>
+
+            {/* Evidence */}
+
+            <div className="border-b border-border p-5">
+              <div className="flex items-center gap-2">
+                <Database className="h-3.5 w-3.5 text-accent" />
+
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                  Evidence Knowledge Base
+                </span>
+              </div>
+
+              <p className="mt-3 text-xs text-foreground">
+                local://verified-evidence
+              </p>
+
+              <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                10 verified records
+              </p>
+
+              {evidence.length >
+                0 && (
+                <p className="mt-3 text-xs text-accent">
+                  {evidence.length} retrieved for this RFP
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Left Bottom Controls */}
+
+          <div className="shrink-0 border-t border-border bg-background p-5">
+            <button
+              disabled={
+                running ||
+                !selectedFile
+              }
+              onClick={
+                runAgentSwarm
+              }
+              className="w-full rounded bg-primary px-4 py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {running
+                ? "Swarm Running..."
+                : "Launch Agent Swarm"}
+            </button>
+
+            {!running &&
+              draftText && (
+                <button
+                  disabled={
+                    approved
+                  }
+                  onClick={() =>
+                    setApproved(
+                      true,
+                    )
+                  }
+                  className={[
+                    "mt-3 w-full rounded border px-4 py-3 text-sm font-medium transition",
+                    approved
+                      ? "border-accent bg-accent/10 text-accent"
+                      : "border-border hover:bg-secondary",
+                  ].join(
+                    " ",
+                  )}
+                >
+                  {approved ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Check className="h-4 w-4" />
+                      Human Sign-off Recorded
+                    </span>
+                  ) : (
+                    "Approve for Export"
+                  )}
+                </button>
+              )}
+          </div>
+        </aside>
+
+        {/* ====================================================
+            RIGHT WORKSPACE
+        ==================================================== */}
+
+        <main className="flex min-h-0 min-w-0 flex-col bg-background">
+          {/* Tabs */}
+
+          <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-5">
+            <div className="flex h-full items-center">
+              {(
+                [
+                  "proposal",
+                  "compliance",
+                  "evidence",
+                ] as WorkspaceTab[]
+              ).map(
+                (tab) => (
+                  <button
+                    key={tab}
+                    onClick={() =>
+                      setActiveTab(
+                        tab,
+                      )
+                    }
+                    className={[
+                      "h-full border-b-2 px-4 text-xs font-medium capitalize transition",
+                      activeTab ===
+                      tab
+                        ? "border-foreground text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground",
+                    ].join(
+                      " ",
+                    )}
+                  >
+                    {tab ===
+                    "proposal"
+                      ? "Proposal"
+                      : tab ===
+                          "compliance"
+                        ? "Compliance"
+                        : "Evidence"}
+                  </button>
+                ),
+              )}
+            </div>
+
+            <div className="shrink-0">
+              {activeTab ===
+                "proposal" &&
+                draftText && (
+                <button
+                  disabled={
+                    !approved
+                  }
+                  onClick={
+                    exportProposal
+                  }
+                  className="inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium transition hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-35"
+                  title={
+                    approved
+                      ? "Export proposal"
+                      : "Human sign-off required before export"
+                  }
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export PDF
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ==================================================
+              PROPOSAL
+          ================================================== */}
 
           {activeTab ===
             "proposal" && (
-            <article className="mx-auto w-full max-w-3xl overflow-y-auto px-8 py-8">
-              {draftText ? (
-                <div className="text-sm leading-relaxed text-foreground [&>h1]:mb-6 [&>h1]:text-3xl [&>h1]:font-bold [&>h2]:mb-4 [&>h2]:mt-10 [&>h2]:border-b [&>h2]:border-border [&>h2]:pb-2 [&>h2]:text-xl [&>h2]:font-semibold [&>h3]:mb-3 [&>h3]:mt-6 [&>h3]:text-lg [&>h3]:font-medium [&>p]:mb-5 [&>ul]:mb-5 [&>ul]:list-outside [&>ul]:list-disc [&>ul]:pl-5 [&>li]:mb-2">
-                  <ReactMarkdown>
-                    {draftText}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <div className="mt-32 text-center font-mono text-sm text-muted-foreground">
-                  [ Document empty. Deploy swarm to generate draft. ]
-                </div>
-              )}
+            <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+              <div className="mx-auto w-full max-w-5xl px-7 py-9 lg:px-12 lg:py-12">
+                {!draftText ? (
+                  <div className="flex min-h-[470px] items-center justify-center">
+                    <div className="max-w-md text-center">
+                      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-border bg-card">
+                        <FileText className="h-6 w-6 text-muted-foreground" />
+                      </div>
 
-              {draftText && (
-                <div className="mt-16 border-t border-border pt-6 font-mono text-xs text-muted-foreground">
-                  Reviewer sign-off:{" "}
-                  {approved
-                    ? "Human-in-the-loop · approved"
-                    : "pending"}
-                </div>
-              )}
-            </article>
+                      <h2 className="mt-5 text-xl font-semibold tracking-tight">
+                        Proposal workspace
+                      </h2>
+
+                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                        Upload an RFP and launch the agent swarm to generate an evidence-backed proposal.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <article className="rounded-xl border border-border bg-card/40 shadow-sm">
+                    {/* Proposal Header */}
+
+                    <div className="border-b border-border px-7 py-7 lg:px-9">
+                      <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
+                            Proposal Response
+                          </p>
+
+                          <h1 className="mt-2 text-2xl font-semibold tracking-tight lg:text-3xl">
+                            {
+                              projectTitle ||
+                              "RFP Proposal"
+                            }
+                          </h1>
+
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            Evidence-backed submission generated by the BidBot agent swarm.
+                          </p>
+                        </div>
+
+                        <div className="shrink-0 rounded-lg border border-border bg-background px-4 py-3 sm:min-w-[112px] sm:text-right">
+                          <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-muted-foreground">
+                            Compliance
+                          </p>
+
+                          <p className="mt-1 text-2xl font-semibold">
+                            {score}
+                            <span className="text-sm text-muted-foreground">
+                              /100
+                            </span>
+                          </p>
+
+                          {improvement >
+                            0 && (
+                            <p className="mt-1 font-mono text-[10px] text-accent">
+                              +{improvement} after revision
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Proposal Content */}
+
+                    <div className="px-7 py-8 lg:px-9 lg:py-10">
+                      <div className="proposal-content max-w-none text-foreground">
+                        <ReactMarkdown
+                          remarkPlugins={[
+                            remarkGfm,
+                          ]}
+                          components={{
+                            a: ({
+                              children,
+                              ...props
+                            }) => (
+                              <a
+                                {...props}
+                                className="text-accent underline underline-offset-2"
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {
+                                  children
+                                }
+                              </a>
+                            ),
+                          }}
+                        >
+                          {
+                            draftText
+                          }
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+
+                    {/* Proposal Footer */}
+
+                    <div className="border-t border-border px-7 py-4 lg:px-9">
+                      <div className="flex flex-col gap-2 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                        <span className="font-mono uppercase tracking-widest">
+                          Generated by BidBot
+                        </span>
+
+                        <span>
+                          Human sign-off required before export
+                        </span>
+                      </div>
+                    </div>
+                  </article>
+                )}
+              </div>
+            </div>
           )}
 
-          {/* ====================================================
-              COMPLIANCE TAB
-          ==================================================== */}
+          {/* ==================================================
+              COMPLIANCE
+          ================================================== */}
 
           {activeTab ===
             "compliance" && (
-            <article className="flex-1 overflow-y-auto px-6 py-6">
-              {/* Score summary */}
-              <div className="mb-6 grid grid-cols-3 gap-3">
-                <MetricCard
-                  label="Final Score"
-                  value={`${score}/100`}
-                />
+            <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+              <div className="mx-auto max-w-5xl p-6 lg:p-10">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="rounded-lg border border-border bg-card p-5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Final Score
+                    </p>
 
-                <MetricCard
-                  label="Initial Score"
-                  value={
-                    initialScore > 0
-                      ? `${initialScore}/100`
-                      : "—"
-                  }
-                />
+                    <p className="mt-2 text-3xl font-semibold">
+                      {score}
+                      <span className="text-base text-muted-foreground">
+                        /100
+                      </span>
+                    </p>
+                  </div>
 
-                <MetricCard
-                  label="Improvement"
-                  value={
-                    initialScore > 0 &&
-                    score !== 0
-                      ? `${
-                          score -
-                          initialScore >
-                          0
-                            ? "+"
-                            : ""
-                        }${
-                          score -
-                          initialScore
-                        }`
-                      : "—"
-                  }
-                />
-              </div>
+                  <div className="rounded-lg border border-border bg-card p-5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Initial Score
+                    </p>
 
-              {/* Compliance Matrix */}
-              <div className="rounded-lg border border-border bg-card/30 p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-foreground">
-                      Compliance Matrix
+                    <p className="mt-2 text-3xl font-semibold">
+                      {initialScore ??
+                        "—"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-border bg-card p-5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Revision Impact
+                    </p>
+
+                    <p className="mt-2 text-3xl font-semibold">
+                      {initialScore !==
+                      null
+                        ? `${
+                            improvement >
+                            0
+                              ? "+"
+                              : ""
+                          }${improvement}`
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
+
+                <section className="mt-8">
+                  <div className="mb-4 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                        Mandatory Clause Audit
+                      </p>
+
+                      <h2 className="mt-1 text-lg font-semibold">
+                        Compliance Matrix
+                      </h2>
                     </div>
 
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Requirement-level audit status
+                    <div className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                      {
+                        requirements.filter(
+                          (
+                            requirement,
+                          ) =>
+                            requirement.is_mandatory,
+                        ).length
+                      }{" "}
+                      mandatory clauses
                     </div>
                   </div>
 
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {
-                      requirements.length
-                    }{" "}
-                    clauses
-                  </span>
-                </div>
-
-                {requirements.length >
-                0 ? (
-                  <div className="overflow-hidden rounded border border-border">
-                    <div className="grid grid-cols-[70px_1fr_100px_1.2fr] border-b border-border bg-secondary/50 px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <div className="overflow-hidden rounded-lg border border-border">
+                    <div className="grid grid-cols-[90px_minmax(0,1fr)_120px] border-b border-border bg-card px-4 py-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                       <span>
                         Clause
                       </span>
@@ -2274,305 +2240,368 @@ export function Dashboard({
                         Requirement
                       </span>
 
-                      <span>
+                      <span className="text-right">
                         Status
-                      </span>
-
-                      <span>
-                        Evidence
                       </span>
                     </div>
 
-                    {requirements.map(
-                      (requirement) => {
-                        const flag =
-                          criticFlags.find(
-                            (item) =>
-                              item.clause_id ===
-                              requirement.clause_id,
-                          );
+                    {requirements
+                      .filter(
+                        (
+                          requirement,
+                        ) =>
+                          requirement.is_mandatory,
+                      )
+                      .map(
+                        (
+                          requirement,
+                        ) => {
+                          const flag =
+                            criticFlags.find(
+                              (
+                                item,
+                              ) =>
+                                item.clause_id ===
+                                requirement.clause_id,
+                            );
 
-                        const status =
-                          !draftText
-                            ? "pending"
-                            : flag?.status ||
-                              "satisfied";
+                          const status =
+                            !draftText
+                              ? "pending"
+                              : flag?.status ||
+                                "satisfied";
 
-                        const topEvidence =
-                          evidence.find(
-                            (item) =>
-                              item.requirement_id ===
-                              requirement.clause_id,
-                          );
-
-                        return (
-                          <div
-                            key={
-                              requirement.clause_id
-                            }
-                            className="grid grid-cols-[70px_1fr_100px_1.2fr] items-start border-b border-border px-3 py-3 text-xs last:border-b-0"
-                          >
-                            <span className="font-mono font-medium text-accent">
-                              {
+                          return (
+                            <div
+                              key={
                                 requirement.clause_id
                               }
-                            </span>
-
-                            <span className="pr-3 text-foreground">
-                              {
-                                requirement.description
-                              }
-                            </span>
-
-                            <span
-                              className={`font-mono text-[10px] uppercase ${
-                                status ===
-                                "satisfied"
-                                  ? "text-success"
-                                  : status ===
-                                      "partial"
-                                    ? "text-warning"
-                                    : status ===
-                                        "missing"
-                                      ? "text-destructive"
-                                      : "text-muted-foreground"
-                              }`}
+                              className="grid grid-cols-[90px_minmax(0,1fr)_120px] items-start border-b border-border px-4 py-4 last:border-b-0"
                             >
-                              {
-                                status
-                              }
-                            </span>
+                              <span className="font-mono text-xs font-medium">
+                                {
+                                  requirement.clause_id
+                                }
+                              </span>
 
-                            <span className="pr-1 text-muted-foreground">
-                              {topEvidence
-                                ? topEvidence.title
-                                : "No matching evidence"}
-                            </span>
-                          </div>
-                        );
-                      },
+                              <span className="pr-5 text-sm leading-relaxed text-muted-foreground">
+                                {
+                                  requirement.description
+                                }
+                              </span>
+
+                              <div className="flex justify-end">
+                                <span
+                                  className={[
+                                    "inline-flex items-center gap-1.5 rounded border px-2 py-1 font-mono text-[10px] uppercase",
+                                    status ===
+                                      "satisfied"
+                                      ? "border-accent/30 bg-accent/10 text-accent"
+                                      : status ===
+                                          "partial"
+                                        ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
+                                        : status ===
+                                            "missing"
+                                          ? "border-red-500/30 bg-red-500/10 text-red-400"
+                                          : "border-border text-muted-foreground",
+                                  ].join(
+                                    " ",
+                                  )}
+                                >
+                                  {status ===
+                                  "satisfied" ? (
+                                    <CheckCircle2 className="h-3 w-3" />
+                                  ) : (
+                                    <AlertTriangle className="h-3 w-3" />
+                                  )}
+
+                                  {status}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        },
+                      )}
+
+                    {requirements.length ===
+                      0 && (
+                      <div className="px-4 py-12 text-center text-sm text-muted-foreground">
+                        No parsed requirements yet.
+                      </div>
                     )}
                   </div>
-                ) : (
-                  <EmptyState text="Run the agent swarm to generate the compliance matrix." />
-                )}
+                </section>
+
+                <section className="mt-8">
+                  <div className="mb-4">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Adversarial Review
+                    </p>
+
+                    <h2 className="mt-1 text-lg font-semibold">
+                      Critic Findings
+                    </h2>
+                  </div>
+
+                  {criticFlags.length ===
+                  0 ? (
+                    <div className="flex items-center gap-3 rounded-lg border border-accent/20 bg-accent/5 p-5">
+                      <CheckCircle2 className="h-5 w-5 text-accent" />
+
+                      <div>
+                        <p className="text-sm font-medium">
+                          No blocking mandatory risks detected.
+                        </p>
+
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          The final proposal passed the automated compliance audit.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {criticFlags.map(
+                        (
+                          flag,
+                        ) => (
+                          <div
+                            key={`${flag.clause_id}-${flag.issue}`}
+                            className="rounded-lg border border-border bg-card p-5"
+                          >
+                            <div className="flex items-center justify-between gap-4">
+                              <div className="flex items-center gap-2">
+                                <AlertTriangle className="h-4 w-4 text-yellow-400" />
+
+                                <span className="font-mono text-xs font-medium">
+                                  {
+                                    flag.clause_id
+                                  }
+                                </span>
+                              </div>
+
+                              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                                {
+                                  flag.severity
+                                }
+                              </span>
+                            </div>
+
+                            <p className="mt-4 text-sm leading-relaxed">
+                              {flag.issue}
+                            </p>
+
+                            <div className="mt-4 border-l-2 border-border pl-4">
+                              <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                                Recommendation
+                              </p>
+
+                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                                {
+                                  flag.suggestion
+                                }
+                              </p>
+                            </div>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  )}
+                </section>
               </div>
-
-              {/* Critic Findings */}
-              {criticFlags.length >
-                0 && (
-                <div className="mt-6 rounded-lg border border-warning/30 bg-warning/5 p-5">
-                  <div className="mb-4 flex items-center gap-2 font-medium text-warning">
-                    <AlertTriangle className="h-5 w-5" />
-
-                    Critic Engine flagged{" "}
-                    {
-                      criticFlags.length
-                    }{" "}
-                    compliance risk
-                    {criticFlags.length ===
-                    1
-                      ? ""
-                      : "s"}
-                  </div>
-
-                  <div className="flex flex-col gap-3">
-                    {criticFlags.map(
-                      (
-                        flag,
-                        index,
-                      ) => (
-                        <div
-                          key={`${flag.clause_id}-${index}`}
-                          className="rounded border border-warning/10 bg-background/60 p-3 text-sm"
-                        >
-                          <div className="mb-1">
-                            <span className="font-bold text-warning">
-                              {flag.severity.toUpperCase()}
-                            </span>
-
-                            <span className="ml-2 font-mono text-xs text-accent">
-                              {
-                                flag.clause_id
-                              }
-                            </span>
-                          </div>
-
-                          <p className="text-foreground">
-                            {
-                              flag.issue
-                            }
-                          </p>
-
-                          <p className="mt-1.5 text-muted-foreground">
-                            {
-                              flag.suggestion
-                            }
-                          </p>
-                        </div>
-                      ),
-                    )}
-                  </div>
-                </div>
-              )}
-            </article>
+            </div>
           )}
 
-          {/* ====================================================
-              EVIDENCE TAB
-          ==================================================== */}
+          {/* ==================================================
+              EVIDENCE
+          ================================================== */}
 
           {activeTab ===
             "evidence" && (
-            <article className="flex-1 overflow-y-auto px-6 py-6">
-              <div className="rounded-lg border border-border bg-card/30 p-5">
-                <div className="mb-5 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-foreground">
-                      Evidence Trace
-                    </div>
+            <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+              <div className="mx-auto max-w-5xl p-6 lg:p-10">
+                <div className="mb-7">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                    Provenance Layer
+                  </p>
 
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Verified sources retrieved for this RFP
-                    </div>
-                  </div>
+                  <h2 className="mt-1 text-xl font-semibold">
+                    Evidence Trace
+                  </h2>
 
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {
-                      evidence.length
-                    }{" "}
-                    records
-                  </span>
+                  <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                    Every retrieved company claim shown here originates from the local verified evidence knowledge base.
+                  </p>
                 </div>
 
-                {evidence.length >
+                {evidence.length ===
                 0 ? (
-                  <div className="flex flex-col gap-3">
-                    {evidence.map(
-                      (item) => (
-                        <div
-                          key={`${item.requirement_id}-${item.source_id}`}
-                          className="rounded border border-border bg-background/60 p-4"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="font-mono text-xs text-accent">
-                              {
-                                item.requirement_id
-                              }
-                            </span>
+                  <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-border">
+                    <div className="text-center">
+                      <Database className="mx-auto h-7 w-7 text-muted-foreground" />
 
-                            <span className="font-mono text-xs text-muted-foreground">
-                              relevance{" "}
-                              {item.relevance_score.toFixed(
-                                3,
+                      <p className="mt-4 text-sm font-medium">
+                        No evidence retrieved yet.
+                      </p>
+
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Run the agent swarm to populate the evidence trace.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {evidence.map(
+                      (
+                        item,
+                        index,
+                      ) => (
+                        <motion.div
+                          key={`${item.source_id}-${item.requirement_id}-${index}`}
+                          initial={{
+                            opacity: 0,
+                            y: 8,
+                          }}
+                          animate={{
+                            opacity: 1,
+                            y: 0,
+                          }}
+                          transition={{
+                            ...spring,
+                            delay:
+                              index *
+                              0.02,
+                          }}
+                          className="rounded-lg border border-border bg-card p-5"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <span className="rounded border border-border px-2 py-1 font-mono text-[10px] text-accent">
+                                {
+                                  item.requirement_id
+                                }
+                              </span>
+
+                              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                                {
+                                  item.source_type
+                                }
+                              </span>
+                            </div>
+
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              Relevance{" "}
+                              {(
+                                item.relevance_score *
+                                100
+                              ).toFixed(
+                                0,
                               )}
+                              %
                             </span>
                           </div>
 
-                          <div className="mt-2 text-sm font-medium text-foreground">
+                          <h3 className="mt-4 text-sm font-semibold">
                             {
                               item.title
                             }
-                          </div>
+                          </h3>
 
-                          <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                            {
-                              item.source_type
-                            }
-                          </div>
-
-                          <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                             {
                               item.content
                             }
                           </p>
-                        </div>
+
+                          <div className="mt-4 flex items-center gap-2 border-t border-border pt-3">
+                            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                              Source ID
+                            </span>
+
+                            <span className="font-mono text-[10px] text-foreground">
+                              {
+                                item.source_id
+                              }
+                            </span>
+                          </div>
+                        </motion.div>
                       ),
                     )}
                   </div>
-                ) : (
-                  <EmptyState text="Run the agent swarm to retrieve verified evidence." />
                 )}
               </div>
-            </article>
+            </div>
           )}
-        </section>
+
+          {/* ==================================================
+              ACTIVITY TERMINAL
+          ================================================== */}
+
+          <div className="shrink-0 border-t border-border bg-[#090a0c]">
+            <div className="flex h-10 items-center justify-between border-b border-border px-5">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                Agent Activity
+              </span>
+
+              <span
+                className={[
+                  "shrink-0 font-mono text-[10px] uppercase tracking-widest",
+                  running
+                    ? "text-accent"
+                    : "text-muted-foreground",
+                ].join(
+                  " ",
+                )}
+              >
+                {running
+                  ? "LIVE"
+                  : "READY"}
+              </span>
+            </div>
+
+            <div
+              ref={termRef}
+              className="bidbot-activity-scroll h-44 overflow-y-auto overflow-x-hidden px-5 py-3"
+            >
+              {lines.length ===
+              0 ? (
+                <p className="font-mono text-[11px] leading-5 text-muted-foreground">
+                  Waiting for swarm execution...
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {lines.map(
+                    (
+                      line,
+                      index,
+                    ) => (
+                      <p
+                        key={`${line.text}-${index}`}
+                        className={[
+                          "break-words font-mono text-[11px] leading-5",
+                          line.tone ===
+                          "success"
+                            ? "text-emerald-400"
+                            : line.tone ===
+                                "warning"
+                              ? "text-yellow-400"
+                              : line.tone ===
+                                  "error"
+                                ? "text-red-400"
+                                : "text-muted-foreground",
+                        ].join(
+                          " ",
+                        )}
+                      >
+                        {line.text}
+                      </p>
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
       </div>
     </div>
-  );
-}
-
-function WorkspaceTabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`relative px-4 py-4 font-mono text-[10px] uppercase tracking-wider transition-colors ${
-        active
-          ? "text-foreground"
-          : "text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {children}
-
-      {active && (
-        <motion.div
-          layoutId="workspace-tab"
-          className="absolute bottom-0 left-2 right-2 h-px bg-accent"
-          transition={spring}
-        />
-      )}
-    </button>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card/30 p-4">
-      <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-
-      <div className="mt-2 text-xl font-semibold text-foreground">
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function EmptyState({
-  text,
-}: {
-  text: string;
-}) {
-  return (
-    <div className="rounded border border-dashed border-border px-5 py-10 text-center font-mono text-xs text-muted-foreground">
-      {text}
-    </div>
-  );
-}
-
-function Label({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <span className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-      {children}
-    </span>
   );
 }

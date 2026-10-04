@@ -10,12 +10,11 @@ import json
 import re
 
 
+# ============================================================
+# APP CONFIG
+# ============================================================
+
 app = FastAPI()
-
-
-# ============================================================
-# CONFIG
-# ============================================================
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_PAGES = 300
@@ -25,11 +24,6 @@ FRONTEND_ORIGIN = os.getenv(
     "http://localhost:8080",
 )
 
-
-# ============================================================
-# CORS
-# ============================================================
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_ORIGIN],
@@ -37,10 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ============================================================
-# LLM CLIENT
-# ============================================================
 
 client = OpenAI(
     api_key=os.getenv("SELORA_API_KEY"),
@@ -63,10 +53,19 @@ class ParserResponse(BaseModel):
     requirements: list[RFPRequirement]
 
 
+class EvidenceItem(BaseModel):
+    requirement_id: str
+    source_id: str
+    source_type: str
+    title: str
+    content: str
+    relevance_score: float
+
+
 class CriticFlag(BaseModel):
     clause_id: str
-    status: str  # satisfied | partial | missing
-    severity: str  # low | medium | high
+    status: str
+    severity: str
     issue: str
     suggestion: str
 
@@ -77,18 +76,14 @@ class CriticResponse(BaseModel):
     approved: bool
 
 
+class RetrieveRequest(BaseModel):
+    requirements: list[RFPRequirement]
+
+
 class CriticRequest(BaseModel):
     requirements: list[RFPRequirement]
+    evidence: list[EvidenceItem]
     draft: str
-
-
-class EvidenceItem(BaseModel):
-    requirement_id: str
-    source_id: str
-    source_type: str
-    title: str
-    content: str
-    relevance_score: float
 
 
 class DraftRequest(BaseModel):
@@ -98,15 +93,15 @@ class DraftRequest(BaseModel):
     critic_feedback: list[CriticFlag] | None = None
 
 
-class RetrieveRequest(BaseModel):
-    requirements: list[RFPRequirement]
-
-
 # ============================================================
-# KNOWLEDGE BASE
+# EVIDENCE KNOWLEDGE BASE
 # ============================================================
 
-KNOWLEDGE_BASE_PATH = "knowledge_base/evidence.json"
+KNOWLEDGE_BASE_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "knowledge_base",
+    "evidence.json",
+)
 
 
 def load_evidence() -> list[dict]:
@@ -115,61 +110,37 @@ def load_evidence() -> list[dict]:
             KNOWLEDGE_BASE_PATH,
             "r",
             encoding="utf-8",
-        ) as f:
-            data = json.load(f)
+        ) as file:
+            data = json.load(file)
 
         if not isinstance(data, list):
             raise ValueError(
-                "Knowledge base must contain a JSON array."
+                "Evidence knowledge base must contain a list."
             )
 
         return data
 
     except FileNotFoundError:
-        raise RuntimeError(
-            f"Knowledge base not found: {KNOWLEDGE_BASE_PATH}"
+        raise HTTPException(
+            status_code=500,
+            detail="Evidence knowledge base file not found.",
         )
 
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Knowledge base contains invalid JSON: {exc}"
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Evidence knowledge base contains invalid JSON.",
         )
 
 
 def tokenize(text: str) -> set[str]:
-    stop_words = {
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "of",
-        "to",
-        "in",
-        "for",
-        "with",
-        "on",
-        "at",
-        "by",
-        "is",
-        "are",
-        "be",
-        "must",
-        "this",
-        "that",
-        "from",
-    }
-
-    words = re.findall(
-        r"[a-z0-9]+",
-        text.lower(),
-    )
-
     return {
-        word
-        for word in words
-        if word not in stop_words
-        and len(word) > 2
+        token
+        for token in re.findall(
+            r"[a-zA-Z0-9]+",
+            text.lower(),
+        )
+        if len(token) > 2
     }
 
 
@@ -181,50 +152,26 @@ def score_evidence(
         requirement.description
     )
 
-    title_tokens = tokenize(
-        evidence.get("title", "")
+    evidence_text = " ".join(
+        [
+            str(evidence.get("title", "")),
+            str(evidence.get("content", "")),
+        ]
     )
 
-    content_tokens = tokenize(
-        evidence.get("content", "")
-    )
-
-    tag_tokens = tokenize(
-        " ".join(
-            evidence.get("tags", [])
-        )
-    )
+    evidence_tokens = tokenize(evidence_text)
 
     if not requirement_tokens:
         return 0.0
 
-    title_matches = len(
-        requirement_tokens & title_tokens
-    )
-
-    content_matches = len(
-        requirement_tokens & content_tokens
-    )
-
-    tag_matches = len(
-        requirement_tokens & tag_tokens
-    )
-
-    weighted_matches = (
-        title_matches * 3
-        + content_matches
-        + tag_matches * 2
-    )
-
-    max_possible = (
-        len(requirement_tokens) * 6
+    overlap = (
+        requirement_tokens
+        & evidence_tokens
     )
 
     return round(
-        min(
-            weighted_matches / max_possible,
-            1.0,
-        ),
+        len(overlap)
+        / len(requirement_tokens),
         3,
     )
 
@@ -233,15 +180,16 @@ def retrieve_evidence(
     requirements: list[RFPRequirement],
     max_results_per_requirement: int = 2,
     threshold: float = 0.08,
-) -> list[dict]:
-    evidence_records = load_evidence()
+) -> list[EvidenceItem]:
 
-    results = []
+    knowledge_base = load_evidence()
+
+    results: list[EvidenceItem] = []
 
     for requirement in requirements:
-        ranked = []
+        ranked: list[tuple[float, dict]] = []
 
-        for evidence in evidence_records:
+        for evidence in knowledge_base:
             score = score_evidence(
                 requirement,
                 evidence,
@@ -249,88 +197,130 @@ def retrieve_evidence(
 
             if score >= threshold:
                 ranked.append(
-                    {
-                        "requirement_id": (
-                            requirement.clause_id
-                        ),
-                        "source_id": evidence["id"],
-                        "source_type": evidence["type"],
-                        "title": evidence["title"],
-                        "content": evidence["content"],
-                        "relevance_score": score,
-                    }
+                    (
+                        score,
+                        evidence,
+                    )
                 )
 
         ranked.sort(
-            key=lambda item: item[
-                "relevance_score"
-            ],
+            key=lambda item: item[0],
             reverse=True,
         )
 
-        results.extend(
-            ranked[
-                :max_results_per_requirement
-            ]
-        )
+        for score, evidence in ranked[
+            :max_results_per_requirement
+        ]:
+            results.append(
+                EvidenceItem(
+                    requirement_id=requirement.clause_id,
+                    source_id=str(
+                        evidence.get(
+                            "source_id",
+                            "",
+                        )
+                    ),
+                    source_type=str(
+                        evidence.get(
+                            "source_type",
+                            "unknown",
+                        )
+                    ),
+                    title=str(
+                        evidence.get(
+                            "title",
+                            "",
+                        )
+                    ),
+                    content=str(
+                        evidence.get(
+                            "content",
+                            "",
+                        )
+                    ),
+                    relevance_score=score,
+                )
+            )
 
     return results
 
 
 # ============================================================
-# LOCAL RFP CONTEXT COMPRESSION
+# PARSER CONTEXT COMPRESSION
 # ============================================================
 
 def build_parser_context(
     page_texts: list[str],
     max_chars: int = 30000,
 ) -> str:
-    """
-    Scan the entire PDF locally, but send only pages
-    that are likely to contain compliance requirements
-    to the parser model.
-    """
 
-    requirement_terms = (
-        "mandatory",
-        "must",
-        "shall",
-        "required",
-        "requirement",
-        "compliance",
-        "qualification",
-        "minimum",
-        "eligibility",
-        "section l",
-        "section m",
+    if not page_texts:
+        return ""
+
+    signal_pattern = re.compile(
+        r"\b("
+        r"mandatory|must|shall|required|"
+        r"requirement|compliance|qualification|"
+        r"minimum|eligibility|"
+        r"section\s+l|section\s+m"
+        r")\b",
+        re.IGNORECASE,
     )
 
-    selected_pages: list[str] = []
+    selected_indices: list[int] = []
 
-    for page_index, page_text in enumerate(
+    # Always keep the first two pages.
+    for index in range(
+        min(2, len(page_texts))
+    ):
+        selected_indices.append(index)
+
+    # Add pages containing requirement-like signals.
+    for index, page_text in enumerate(
         page_texts
     ):
-        normalized = page_text.lower()
-
         if (
-            page_index < 2
-            or any(
-                term in normalized
-                for term in requirement_terms
+            index not in selected_indices
+            and signal_pattern.search(
+                page_text
             )
         ):
-            selected_pages.append(
-                f"[PAGE {page_index + 1}]\n{page_text}"
-            )
+            selected_indices.append(index)
 
-    context = "\n\n".join(
-        selected_pages
-    )
+    selected_indices.sort()
 
-    if len(context) > max_chars:
-        context = context[:max_chars]
+    chunks: list[str] = []
+    total_chars = 0
 
-    return context
+    for index in selected_indices:
+        page_text = page_texts[index].strip()
+
+        if not page_text:
+            continue
+
+        chunk = (
+            f"\n--- PAGE {index + 1} ---\n"
+            f"{page_text}\n"
+        )
+
+        remaining = (
+            max_chars
+            - total_chars
+        )
+
+        if remaining <= 0:
+            break
+
+        if len(chunk) > remaining:
+            chunk = chunk[:remaining]
+
+        chunks.append(chunk)
+        total_chars += len(chunk)
+
+        if total_chars >= max_chars:
+            break
+
+    return "".join(chunks)
 
 
 # ============================================================
@@ -344,28 +334,17 @@ def build_parser_context(
 async def parse_rfp(
     file: UploadFile = File(...),
 ):
-    # --------------------------------------------------------
-    # Read uploaded file
-    # --------------------------------------------------------
 
     content = await file.read()
-
-    # --------------------------------------------------------
-    # File size protection
-    # --------------------------------------------------------
 
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
             detail=(
-                "RFP file is too large. "
-                "Maximum size is 10 MB."
+                "File is too large. "
+                "Maximum allowed size is 10 MB."
             ),
         )
-
-    # --------------------------------------------------------
-    # Parse PDF
-    # --------------------------------------------------------
 
     try:
         pdf = PdfReader(
@@ -373,80 +352,70 @@ async def parse_rfp(
         )
     except Exception as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail=f"Invalid PDF file: {exc}",
         )
-
-    # --------------------------------------------------------
-    # Page limit protection
-    # --------------------------------------------------------
 
     if len(pdf.pages) > MAX_PAGES:
         raise HTTPException(
             status_code=413,
             detail=(
-                f"RFP has too many pages. "
-                f"Maximum is {MAX_PAGES} pages."
+                f"PDF contains {len(pdf.pages)} pages. "
+                f"Maximum allowed is {MAX_PAGES} pages."
             ),
         )
 
-    # --------------------------------------------------------
-    # Scan every page locally
-    # --------------------------------------------------------
-
+    # Scan every page locally.
     page_texts: list[str] = []
 
     for page in pdf.pages:
-        page_text = page.extract_text() or ""
-        page_texts.append(page_text)
+        extracted = page.extract_text()
 
-    # --------------------------------------------------------
-    # Compress parser input before sending it to the LLM
-    # --------------------------------------------------------
+        page_texts.append(
+            extracted or ""
+        )
 
     text = build_parser_context(
-        page_texts
+        page_texts,
+        max_chars=30000,
     )
 
     if not text.strip():
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail=(
-                "No readable text was found "
-                "in the PDF."
+                "Could not extract readable text "
+                "from the uploaded PDF."
             ),
         )
 
-    # --------------------------------------------------------
-    # Parser prompt
-    # --------------------------------------------------------
-
     prompt = f"""
-Extract the mandatory compliance rules from
-the following relevant excerpts of an RFP.
+You are an expert RFP compliance parser.
 
-For every requirement, provide:
-- clause_id
-- description
-- whether it is mandatory
+Extract the mandatory and explicitly required compliance
+requirements from the supplied RFP excerpts.
 
 Rules:
-- Extract requirements from the source text only.
+- Extract only requirements actually present in the RFP.
 - Do not invent requirements.
-- Preserve clause IDs exactly when present.
-- Include every mandatory requirement you can identify.
-- Ignore general marketing or background information.
+- Preserve clause IDs when present.
+- Mark mandatory requirements as true.
+- Requirements expressed with words such as must, shall,
+  required, minimum, mandatory, eligibility, or compliance
+  are typically mandatory.
+- Ignore ordinary background information.
+- Return JSON only.
 
-RFP RELEVANT EXCERPTS:
+RFP EXCERPTS:
 {text}
 
-Return ONLY valid JSON:
+Return exactly this structure:
 
 {{
   "project_title": "String",
   "requirements": [
     {{
-      "clause_id": "String",
+      "clause_id": "L.1",
       "description": "String",
       "is_mandatory": true
     }}
@@ -454,74 +423,66 @@ Return ONLY valid JSON:
 }}
 """
 
-    response = client.chat.completions.create(
-        model="gpt-5-6-luna",
-        max_tokens=1200,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert RFP "
-                    "compliance parser. "
-                    "Return valid JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        response_format={
-            "type": "json_object"
-        },
-    )
-
-    raw_content = (
-        response.choices[0]
-        .message
-        .content
-    )
-
-    if not raw_content:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Parser model returned "
-                "an empty response."
-            ),
-        )
-
     try:
-        raw = json.loads(
-            raw_content
+        response = client.chat.completions.create(
+            model="gpt-5-6-luna",
+            max_tokens=1200,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert RFP "
+                        "compliance parser. "
+                        "Return valid JSON only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            response_format={
+                "type": "json_object"
+            },
         )
-    except json.JSONDecodeError as exc:
+
+        raw_content = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+        if not raw_content:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Parser model returned "
+                    "an empty response."
+                ),
+            )
+
+        parsed = ParserResponse(
+            **json.loads(
+                raw_content
+            )
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=(
-                f"Parser returned invalid JSON: {exc}"
-            ),
+            detail=f"Parser failed: {exc}",
         )
-
-    # --------------------------------------------------------
-    # Validate parser result
-    # --------------------------------------------------------
-
-    parsed = ParserResponse(
-        **raw
-    )
-
-    # --------------------------------------------------------
-    # Reject non-RFP / irrelevant documents
-    # --------------------------------------------------------
 
     if not parsed.requirements:
         raise HTTPException(
             status_code=422,
             detail=(
                 "No mandatory RFP requirements "
-                "were found. Please upload a valid "
-                "RFP or procurement document."
+                "were detected in this document."
             ),
         )
 
@@ -533,7 +494,7 @@ Return ONLY valid JSON:
 # ============================================================
 
 @app.post(
-    "/api/2-retrieve-context"
+    "/api/2-retrieve-context",
 )
 async def retrieve_context(
     request: RetrieveRequest,
@@ -552,18 +513,18 @@ async def retrieve_context(
 # ============================================================
 
 @app.post(
-    "/api/2-draft-proposal"
+    "/api/3-draft-proposal",
 )
 async def draft_proposal(
     request: DraftRequest,
 ):
+
     requirements_text = "\n".join(
         [
             (
-                f"{requirement.clause_id}: "
+                f"- {requirement.clause_id}: "
                 f"{requirement.description} "
-                f"(mandatory="
-                f"{requirement.is_mandatory})"
+                f"(mandatory={requirement.is_mandatory})"
             )
             for requirement
             in request.requirements
@@ -573,15 +534,13 @@ async def draft_proposal(
     evidence_text = "\n".join(
         [
             (
-                f"[Evidence for "
-                f"{item.requirement_id}]\n"
+                f"[Evidence for {item.requirement_id}]\n"
                 f"Source: {item.title}\n"
                 f"Type: {item.source_type}\n"
-                f"Relevance: "
-                f"{item.relevance_score}\n"
                 f"Content: {item.content}"
             )
-            for item in request.evidence
+            for item
+            in request.evidence
         ]
     )
 
@@ -594,10 +553,9 @@ async def draft_proposal(
         feedback_text = "\n".join(
             [
                 (
-                    f"Clause {flag.clause_id} "
-                    f"({flag.severity}): "
-                    f"{flag.issue}\n"
-                    f"Recommendation: "
+                    f"- {flag.clause_id}: "
+                    f"{flag.status} | "
+                    f"{flag.issue} | "
                     f"{flag.suggestion}"
                 )
                 for flag
@@ -606,6 +564,7 @@ async def draft_proposal(
         )
 
         revision_context = f"""
+This is a REVISION pass.
 
 PREVIOUS DRAFT:
 {request.previous_draft}
@@ -613,19 +572,22 @@ PREVIOUS DRAFT:
 CRITIC FEEDBACK:
 {feedback_text}
 
-REVISION INSTRUCTIONS:
-- Revise the previous draft to address every
-  supplied critic issue.
-- Preserve correct content and verified evidence.
-- Do not introduce unsupported claims while
-  fixing the issues.
-- Return the complete revised proposal,
-  not a patch or explanation.
+Revise the previous draft to address every critic finding.
+
+Important:
+- Preserve all verified evidence.
+- Do not invent missing evidence.
+- Do not fabricate names, certifications,
+  customers, metrics, dates, platforms, or outcomes.
+- Keep transparently disclosed evidence gaps.
 """
 
     prompt = f"""
-Write a professional proposal addressing
-the following RFP requirements.
+You are Agent 3, an enterprise RFP proposal drafting agent.
+
+Write a professional proposal response using ONLY:
+1. the supplied RFP requirements
+2. the supplied verified company evidence
 
 RFP REQUIREMENTS:
 {requirements_text}
@@ -633,75 +595,77 @@ RFP REQUIREMENTS:
 VERIFIED COMPANY EVIDENCE:
 {evidence_text}
 
-STRICT RULES:
-- Use ONLY the supplied company evidence
-  for company-specific claims.
-- Never invent certifications, clients,
-  projects, metrics, technologies,
-  capabilities, dates, or outcomes.
-- Do not treat an RFP requirement itself
-  as evidence.
-- Address every mandatory requirement
-  explicitly.
-- Where sufficient evidence does not exist,
-  state that evidence is unavailable
-  instead of fabricating a claim.
-- Preserve the RFP clause IDs when
-  mapping requirements in the proposal.
-- Prefer precise, evidence-backed statements
-  over generic marketing language.
-- Clearly disclose evidence gaps.
-- Keep the proposal concise:
-  target 900–1400 words.
-- Do not repeat the same evidence across
-  multiple sections unless necessary.
-
 {revision_context}
+
+Rules:
+- Address every mandatory requirement explicitly.
+- Use clause IDs where appropriate.
+- Every company-specific claim must be traceable
+  to supplied evidence.
+- Never invent company credentials.
+- Never treat the RFP itself as company evidence.
+- When evidence is insufficient, disclose the gap clearly.
+- Do not pretend missing information exists.
+- Avoid repeating the same evidence unnecessarily.
+- Produce a polished business proposal.
+- Target approximately 900–1400 words.
+- Use clear headings and a compliance-oriented structure.
 """
 
-    response = client.chat.completions.create(
-        model="gpt-5-6-luna",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an expert government "
-                    "proposal writer."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-    )
-
-    draft = (
-        response.choices[0]
-        .message
-        .content
-    )
-
-    if not draft:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Drafting model returned "
-                "an empty response."
-            ),
+    try:
+        response = client.chat.completions.create(
+            model="gpt-5-6-luna",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert enterprise "
+                        "RFP proposal writer."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
         )
 
-    return {
-        "draft": draft
-    }
+        draft = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+        if not draft:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Drafting model returned "
+                    "an empty response."
+                ),
+            )
+
+        return {
+            "draft": draft
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Drafting failed: {exc}",
+        )
 
 
 # ============================================================
-# AGENT 4 — ADVERSARIAL CRITIC
+# AGENT 4 — EVIDENCE-AWARE ADVERSARIAL CRITIC
 # ============================================================
 
 @app.post(
-    "/api/3-critic-review",
+    "/api/4-critic-review",
     response_model=CriticResponse,
 )
 async def critic_review(
@@ -712,44 +676,58 @@ async def critic_review(
             (
                 f"- {requirement.clause_id}: "
                 f"{requirement.description} "
-                f"(mandatory="
-                f"{requirement.is_mandatory})"
+                f"(mandatory={requirement.is_mandatory})"
             )
             for requirement
             in request.requirements
         ]
     )
 
+    evidence_text = "\n".join(
+        [
+            (
+                f"[{item.requirement_id}] "
+                f"{item.title}: "
+                f"{item.content}"
+            )
+            for item
+            in request.evidence
+        ]
+    )
+
     prompt = f"""
-You are a strict RFP compliance auditor.
+You are Agent 4, a strict adversarial RFP compliance auditor.
 
-Evaluate the proposal AGAINST ONLY the
-supplied RFP requirements.
+Audit the proposal against ONLY:
+1. the supplied RFP requirements
+2. the supplied verified company evidence
 
-For every requirement, determine:
+You MUST return exactly one check for every supplied clause.
 
-- satisfied =
-  clearly addressed by the proposal
+Rules:
 
-- partial =
-  partially addressed or required evidence
-  is incomplete
-
-- missing =
-  absent from the proposal
-
-Do not invent additional requirements.
-
-Clause IDs MUST exactly match the supplied
-clause IDs.
+- satisfied = requirement is explicitly addressed and supported by supplied evidence
+- partial = requirement is addressed but evidence is incomplete
+- missing = requirement is absent or unsupported
+- Never invent evidence.
+- Never treat RFP wording as company evidence.
+- Flag unsupported company-specific claims.
+- Be strict about mandatory requirements.
+- Keep "issue" under 20 words.
+- Keep "suggestion" under 25 words.
+- Return JSON only.
+- Do not include explanations outside the JSON.
 
 RFP REQUIREMENTS:
 {requirements_text}
 
+VERIFIED COMPANY EVIDENCE:
+{evidence_text}
+
 PROPOSAL:
 {request.draft}
 
-Return ONLY valid JSON:
+Return exactly:
 
 {{
   "checks": [
@@ -764,62 +742,110 @@ Return ONLY valid JSON:
 }}
 """
 
-    response = client.chat.completions.create(
-        model="gpt-5-6-luna",
-        max_tokens=1000,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict RFP "
-                    "compliance auditor. "
-                    "Return valid JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        response_format={
-            "type": "json_object"
-        },
-    )
-
-    raw_content = (
-        response.choices[0]
-        .message
-        .content
-    )
-
-    if not raw_content:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Critic model returned "
-                "an empty response."
-            ),
-        )
-
     try:
-        raw = json.loads(
-            raw_content
-        )
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Critic returned invalid JSON: {exc}"
-            ),
+        response = client.chat.completions.create(
+            model="gpt-5-6-luna",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict RFP compliance auditor. "
+                        "Return one concise JSON object only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            response_format={
+                "type": "json_object"
+            },
         )
 
-    checks = [
-        CriticFlag(**item)
-        for item in raw.get(
-            "checks",
-            [],
+        raw_content = (
+            response
+            .choices[0]
+            .message
+            .content
         )
-    ]
+
+        if not raw_content:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Critic model returned "
+                    "an empty response."
+                ),
+            )
+
+        cleaned_content = (
+            raw_content.strip()
+        )
+
+        # Remove accidental markdown fences.
+        if cleaned_content.startswith(
+            "```"
+        ):
+            cleaned_content = re.sub(
+                r"^```(?:json)?\s*",
+                "",
+                cleaned_content,
+            )
+
+            cleaned_content = re.sub(
+                r"\s*```$",
+                "",
+                cleaned_content,
+            )
+
+        try:
+            raw = json.loads(
+                cleaned_content
+            )
+
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Critic returned invalid JSON: "
+                    f"{exc}. "
+                    f"Response preview: "
+                    f"{cleaned_content[:500]}"
+                ),
+            )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Critic failed: {exc}",
+        )
+
+    # ========================================================
+    # VALIDATE MODEL CHECKS
+    # ========================================================
+
+    checks: list[CriticFlag] = []
+
+    for item in raw.get(
+        "checks",
+        [],
+    ):
+        try:
+            checks.append(
+                CriticFlag(
+                    **item
+                )
+            )
+        except Exception:
+            continue
+
+    # ========================================================
+    # MAKE SURE EVERY CLAUSE HAS A RESULT
+    # ========================================================
 
     expected_ids = {
         requirement.clause_id
@@ -829,12 +855,13 @@ Return ONLY valid JSON:
 
     returned_ids = {
         check.clause_id
-        for check in checks
+        for check
+        in checks
     }
 
     missing_ids = (
-        expected_ids -
-        returned_ids
+        expected_ids
+        - returned_ids
     )
 
     for clause_id in missing_ids:
@@ -844,16 +871,17 @@ Return ONLY valid JSON:
                 status="missing",
                 severity="high",
                 issue=(
-                    "No compliance result "
-                    "was returned for "
-                    "this clause."
+                    "No valid audit result was returned."
                 ),
                 suggestion=(
-                    "Review this requirement "
-                    "manually."
+                    "Review this clause manually."
                 ),
             )
         )
+
+    # ========================================================
+    # DETERMINISTIC SCORE
+    # ========================================================
 
     mandatory_requirements = [
         requirement
@@ -868,7 +896,8 @@ Return ONLY valid JSON:
         matching_check = next(
             (
                 check
-                for check in checks
+                for check
+                in checks
                 if check.clause_id
                 == requirement.clause_id
             ),
@@ -898,19 +927,28 @@ Return ONLY valid JSON:
         else 0
     )
 
+    # ========================================================
+    # BLOCKING FLAGS
+    # ========================================================
+
+    mandatory_ids = {
+        requirement.clause_id
+        for requirement
+        in mandatory_requirements
+    }
+
     blocking_flags = [
         check
-        for check in checks
+        for check
+        in checks
         if (
-            check.status
-            in {"missing", "partial"}
-            and any(
-                requirement.clause_id
-                == check.clause_id
-                and requirement.is_mandatory
-                for requirement
-                in mandatory_requirements
-            )
+            check.clause_id
+            in mandatory_ids
+            and check.status
+            in {
+                "missing",
+                "partial",
+            }
         )
     ]
 
@@ -918,6 +956,7 @@ Return ONLY valid JSON:
         compliance_score=compliance_score,
         flags=blocking_flags,
         approved=(
-            len(blocking_flags) == 0
+            len(blocking_flags)
+            == 0
         ),
     )
