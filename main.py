@@ -434,6 +434,7 @@ Return ONLY valid JSON:
 
     response = client.chat.completions.create(
         model="gpt-5.6-luna",
+        max_tokens=1200,
         messages=[
             {
                 "role": "system",
@@ -603,6 +604,7 @@ STRICT RULES:
 
     response = client.chat.completions.create(
         model="gpt-5.6-luna",
+        max_tokens=2500,
         messages=[
             {
                 "role": "system",
@@ -707,6 +709,7 @@ Return ONLY valid JSON:
 
     response = client.chat.completions.create(
         model="gpt-5.6-luna",
+        max_tokens=1000,
         messages=[
             {
                 "role": "system",
