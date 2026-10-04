@@ -15,7 +15,7 @@ import autoTable from "jspdf-autotable";
 
 const NODES = [
   "Document Parser",
-  "Vector Retriever",
+  "Evidence Retriever",
   "Drafting LLM",
   "Critic Engine",
 ];
@@ -41,6 +41,16 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
   const [score, setScore] = useState(0);
   const [draftText, setDraftText] = useState<string>("");
   const [criticFlags, setCriticFlags] = useState<CriticFlag[]>([]);
+
+  const handleFileSelected = (file: File) => {
+    setSelectedFile(file);
+    setScore(0);
+    setDraftText("");
+    setCriticFlags([]);
+    setApproved(false);
+    setLines([]);
+    setActiveNode(0);
+  };
 
   useEffect(() => {
     termRef.current?.scrollTo({
@@ -1266,7 +1276,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
 
       setLines((prev) => [
         ...prev,
-        "✦ [Evidence KB] Searching verified company evidence...",
+        "✦ [Evidence Retriever] Searching verified company evidence...",
       ]);
 
       const retrievalRes = await fetch(
@@ -1592,8 +1602,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
               const file = e.dataTransfer.files[0];
 
               if (file) {
-                setSelectedFile(file);
-                setApproved(false);
+                handleFileSelected(file);
               }
             }}
             className={`flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed px-4 py-10 text-center transition-colors ${
@@ -1623,8 +1632,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                 const file = e.target.files?.[0];
 
                 if (file) {
-                  setSelectedFile(file);
-                  setApproved(false);
+                  handleFileSelected(file);
                 }
               }}
             />
