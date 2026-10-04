@@ -113,10 +113,11 @@ async function fetchJson<T>(
   url: string,
   options?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(
-    url,
-    options,
-  );
+  const response =
+    await fetch(
+      url,
+      options,
+    );
 
   const data: unknown =
     await response
@@ -144,9 +145,14 @@ export function Dashboard({
     useState(false);
 
   const [lines, setLines] =
-    useState<ActivityLine[]>([]);
+    useState<ActivityLine[]>(
+      [],
+    );
 
-  const [selectedFile, setSelectedFile] =
+  const [
+    selectedFile,
+    setSelectedFile,
+  ] =
     useState<File | null>(null);
 
   const [drag, setDrag] =
@@ -161,51 +167,115 @@ export function Dashboard({
   const [score, setScore] =
     useState(0);
 
-  const [initialScore, setInitialScore] =
-    useState<number | null>(null);
+  const [
+    initialScore,
+    setInitialScore,
+  ] =
+    useState<number | null>(
+      null,
+    );
 
-  const [draftText, setDraftText] =
-    useState("");
+  const [
+    draftText,
+    setDraftText,
+  ] = useState("");
 
-  const [criticFlags, setCriticFlags] =
-    useState<CriticFlag[]>([]);
+  const [
+    criticFlags,
+    setCriticFlags,
+  ] =
+    useState<CriticFlag[]>(
+      [],
+    );
 
-  const [evidence, setEvidence] =
-    useState<EvidenceRecord[]>([]);
+  const [
+    evidence,
+    setEvidence,
+  ] =
+    useState<EvidenceRecord[]>(
+      [],
+    );
 
-  const [requirements, setRequirements] =
-    useState<Requirement[]>([]);
+  const [
+    requirements,
+    setRequirements,
+  ] =
+    useState<Requirement[]>(
+      [],
+    );
 
-  const [projectTitle, setProjectTitle] =
-    useState("");
+  const [
+    projectTitle,
+    setProjectTitle,
+  ] = useState("");
 
-  const [activeTab, setActiveTab] =
-    useState<WorkspaceTab>("proposal");
+  const [
+    activeTab,
+    setActiveTab,
+  ] =
+    useState<WorkspaceTab>(
+      "proposal",
+    );
 
   const termRef =
-    useRef<HTMLDivElement>(null);
+    useRef<HTMLDivElement>(
+      null,
+    );
 
   const fileInputRef =
-    useRef<HTMLInputElement>(null);
+    useRef<HTMLInputElement>(
+      null,
+    );
 
   useEffect(() => {
     termRef.current?.scrollTo({
-      top: termRef.current.scrollHeight,
+      top:
+        termRef.current
+          .scrollHeight,
       behavior: "smooth",
     });
   }, [lines]);
+
+  const mandatoryCount =
+    requirements.filter(
+      (item) =>
+        item.is_mandatory,
+    ).length;
+
+  const needsReviewCount =
+    criticFlags.length;
+
+  const satisfiedCount =
+    Math.max(
+      0,
+      mandatoryCount -
+        needsReviewCount,
+    );
+
+  const improvement =
+    initialScore !== null
+      ? score -
+        initialScore
+      : 0;
+
+  const swarmComplete =
+    !running &&
+    activeNode >= 4 &&
+    Boolean(draftText);
 
   const addLine = (
     text: string,
     tone: ActivityTone = "default",
   ) => {
-    setLines((previous) => [
-      ...previous,
-      {
-        text,
-        tone,
-      },
-    ]);
+    setLines(
+      (previous) => [
+        ...previous,
+        {
+          text,
+          tone,
+        },
+      ],
+    );
   };
 
   const handleFileSelected = (
@@ -248,7 +318,9 @@ export function Dashboard({
     setApproved(false);
     setLines([]);
     setActiveNode(0);
-    setActiveTab("proposal");
+    setActiveTab(
+      "proposal",
+    );
   };
 
   const handleInputChange = (
@@ -272,232 +344,136 @@ export function Dashboard({
     );
   };
 
-  const runAgentSwarm = async () => {
-    if (!selectedFile) {
-      alert(
-        "Please upload an RFP document first.",
-      );
-      return;
-    }
+  // ==========================================================
+  // AGENT PIPELINE
+  // ==========================================================
 
-    setRunning(true);
-    setLines([]);
-    setScore(0);
-    setInitialScore(null);
-    setDraftText("");
-    setCriticFlags([]);
-    setEvidence([]);
-    setRequirements([]);
-    setProjectTitle("");
-    setApproved(false);
-    setActiveTab("proposal");
-
-    try {
-      // ======================================================
-      // AGENT 1 — PARSER
-      // ======================================================
-
-      setActiveNode(0);
-
-      addLine(
-        "✦ [Agent 1 • Parser] Ingesting PDF and extracting constraints...",
-      );
-
-      const formData =
-        new FormData();
-
-      formData.append(
-        "file",
-        selectedFile,
-      );
-
-      const parsedData =
-        await fetchJson<ParserResponse>(
-          `${API_BASE_URL}/api/1-parse-rfp`,
-          {
-            method: "POST",
-            body: formData,
-          },
+  const runAgentSwarm =
+    async () => {
+      if (!selectedFile) {
+        alert(
+          "Please upload an RFP document first.",
         );
+        return;
+      }
 
-      const parsedRequirements =
-        parsedData.requirements ||
-        [];
-
-      setProjectTitle(
-        parsedData.project_title ||
-          "",
+      setRunning(true);
+      setLines([]);
+      setScore(0);
+      setInitialScore(null);
+      setDraftText("");
+      setCriticFlags([]);
+      setEvidence([]);
+      setRequirements([]);
+      setProjectTitle("");
+      setApproved(false);
+      setActiveTab(
+        "proposal",
       );
 
-      setRequirements(
-        parsedRequirements,
-      );
+      try {
+        // ------------------------------------------------------
+        // AGENT 1
+        // ------------------------------------------------------
 
-      addLine(
-        `✓ [Agent 1 • Parser] Extracted ${parsedRequirements.length} mandatory rule${
-          parsedRequirements.length ===
-          1
-            ? ""
-            : "s"
-        } from "${parsedData.project_title}".`,
-        "success",
-      );
+        setActiveNode(0);
 
-      // ======================================================
-      // AGENT 2 — EVIDENCE RETRIEVER
-      // ======================================================
-
-      setActiveNode(1);
-
-      addLine(
-        "✦ [Agent 2 • Evidence Retriever] Searching verified company evidence...",
-      );
-
-      const evidenceData =
-        await fetchJson<EvidenceResponse>(
-          `${API_BASE_URL}/api/2-retrieve-context`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              requirements:
-                parsedRequirements,
-            }),
-          },
-        );
-
-      const retrievedEvidence =
-        evidenceData.evidence ||
-        [];
-
-      setEvidence(
-        retrievedEvidence,
-      );
-
-      addLine(
-        `✓ [Agent 2 • Evidence Retriever] Retrieved ${retrievedEvidence.length} verified evidence records.`,
-        "success",
-      );
-
-      // ======================================================
-      // AGENT 3 — INITIAL DRAFT
-      // ======================================================
-
-      setActiveNode(2);
-
-      addLine(
-        "✦ [Agent 3 • Proposal Drafter] Writing evidence-backed proposal...",
-      );
-
-      const draftData =
-        await fetchJson<{
-          draft: string;
-        }>(
-          `${API_BASE_URL}/api/3-draft-proposal`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              requirements:
-                parsedRequirements,
-              evidence:
-                retrievedEvidence,
-            }),
-          },
-        );
-
-      const initialDraft =
-        draftData.draft || "";
-
-      setDraftText(
-        initialDraft,
-      );
-
-      addLine(
-        "✓ [Agent 3 • Proposal Drafter] Initial proposal complete.",
-        "success",
-      );
-
-      // ======================================================
-      // AGENT 4 — INITIAL CRITIC
-      // ======================================================
-
-      setActiveNode(3);
-
-      addLine(
-        "✦ [Agent 4 • Adversarial Critic] Auditing every mandatory clause...",
-      );
-
-      const firstCritic =
-        await fetchJson<CriticResponse>(
-          `${API_BASE_URL}/api/4-critic-review`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify({
-              requirements:
-                parsedRequirements,
-              evidence:
-                retrievedEvidence,
-              draft: initialDraft,
-            }),
-          },
-        );
-
-      const firstScore =
-        firstCritic.compliance_score ??
-        0;
-
-      setInitialScore(
-        firstScore,
-      );
-
-      setScore(
-        firstScore,
-      );
-
-      addLine(
-        `✓ [Agent 4 • Adversarial Critic] Initial compliance score: ${firstScore}/100.`,
-        "success",
-      );
-
-      let finalCritic =
-        firstCritic;
-
-      // ======================================================
-      // CRITIC → REVISION LOOP
-      // ======================================================
-
-      if (
-        firstCritic.flags.length >
-        0
-      ) {
         addLine(
-          `⚠ [Agent 4 • Adversarial Critic] Found ${firstCritic.flags.length} blocking compliance risk${
-            firstCritic.flags.length ===
+          "✦ [Agent 1 • Parser] Ingesting PDF and extracting constraints...",
+        );
+
+        const formData =
+          new FormData();
+
+        formData.append(
+          "file",
+          selectedFile,
+        );
+
+        const parsedData =
+          await fetchJson<ParserResponse>(
+            `${API_BASE_URL}/api/1-parse-rfp`,
+            {
+              method: "POST",
+              body: formData,
+            },
+          );
+
+        const parsedRequirements =
+          parsedData.requirements ??
+          [];
+
+        setProjectTitle(
+          parsedData.project_title ??
+            "",
+        );
+
+        setRequirements(
+          parsedRequirements,
+        );
+
+        addLine(
+          `✓ [Agent 1 • Parser] Extracted ${parsedRequirements.length} mandatory rule${
+            parsedRequirements.length ===
             1
               ? ""
               : "s"
           }.`,
-          "warning",
+          "success",
         );
+
+        // ------------------------------------------------------
+        // AGENT 2
+        // ------------------------------------------------------
+
+        setActiveNode(1);
+
+        addLine(
+          "✦ [Agent 2 • Evidence Retriever] Searching verified company evidence...",
+        );
+
+        const evidenceData =
+          await fetchJson<EvidenceResponse>(
+            `${API_BASE_URL}/api/2-retrieve-context`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+              body: JSON.stringify(
+                {
+                  requirements:
+                    parsedRequirements,
+                },
+              ),
+            },
+          );
+
+        const retrievedEvidence =
+          evidenceData.evidence ??
+          [];
+
+        setEvidence(
+          retrievedEvidence,
+        );
+
+        addLine(
+          `✓ [Agent 2 • Evidence Retriever] Retrieved ${retrievedEvidence.length} verified evidence records.`,
+          "success",
+        );
+
+        // ------------------------------------------------------
+        // AGENT 3
+        // ------------------------------------------------------
 
         setActiveNode(2);
 
         addLine(
-          "✦ [Agent 3 • Proposal Drafter] Revising draft against critic findings...",
+          "✦ [Agent 3 • Proposal Drafter] Writing evidence-backed proposal...",
         );
 
-        const revisionData =
+        const draftData =
           await fetchJson<{
             draft: string;
           }>(
@@ -508,43 +484,41 @@ export function Dashboard({
                 "Content-Type":
                   "application/json",
               },
-              body: JSON.stringify({
-                requirements:
-                  parsedRequirements,
-                evidence:
-                  retrievedEvidence,
-                previous_draft:
-                  initialDraft,
-                critic_feedback:
-                  firstCritic.flags,
-              }),
+              body: JSON.stringify(
+                {
+                  requirements:
+                    parsedRequirements,
+                  evidence:
+                    retrievedEvidence,
+                },
+              ),
             },
           );
 
-        const revisedDraft =
-          revisionData.draft ||
+        const initialDraft =
+          draftData.draft ??
           "";
 
         setDraftText(
-          revisedDraft,
+          initialDraft,
         );
 
         addLine(
-          "✓ [Agent 3 • Proposal Drafter] Revision complete.",
+          "✓ [Agent 3 • Proposal Drafter] Initial proposal complete.",
           "success",
         );
 
-        // ====================================================
-        // AGENT 4 — RE-CRITIC
-        // ====================================================
+        // ------------------------------------------------------
+        // AGENT 4
+        // ------------------------------------------------------
 
         setActiveNode(3);
 
         addLine(
-          "✦ [Agent 4 • Adversarial Critic] Re-auditing revised proposal...",
+          "✦ [Agent 4 • Adversarial Critic] Auditing every mandatory clause...",
         );
 
-        finalCritic =
+        const firstCritic =
           await fetchJson<CriticResponse>(
             `${API_BASE_URL}/api/4-critic-review`,
             {
@@ -553,102 +527,223 @@ export function Dashboard({
                 "Content-Type":
                   "application/json",
               },
-              body: JSON.stringify({
-                requirements:
-                  parsedRequirements,
-                evidence:
-                  retrievedEvidence,
-                draft: revisedDraft,
-              }),
+              body: JSON.stringify(
+                {
+                  requirements:
+                    parsedRequirements,
+                  evidence:
+                    retrievedEvidence,
+                  draft: initialDraft,
+                },
+              ),
             },
           );
 
+        const firstScore =
+          firstCritic.compliance_score ??
+          0;
+
+        setInitialScore(
+          firstScore,
+        );
+
         setScore(
+          firstScore,
+        );
+
+        addLine(
+          `✓ [Agent 4 • Adversarial Critic] Initial compliance score: ${firstScore}/100.`,
+          "success",
+        );
+
+        let finalCritic =
+          firstCritic;
+
+        // ------------------------------------------------------
+        // REVISION
+        // ------------------------------------------------------
+
+        if (
+          firstCritic.flags.length >
+          0
+        ) {
+          addLine(
+            `⚠ [Agent 4 • Adversarial Critic] Found ${firstCritic.flags.length} blocking compliance risk${
+              firstCritic.flags.length ===
+              1
+                ? ""
+                : "s"
+            }.`,
+            "warning",
+          );
+
+          setActiveNode(2);
+
+          addLine(
+            "✦ [Agent 3 • Proposal Drafter] Revising draft against critic findings...",
+          );
+
+          const revisionData =
+            await fetchJson<{
+              draft: string;
+            }>(
+              `${API_BASE_URL}/api/3-draft-proposal`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+                body: JSON.stringify(
+                  {
+                    requirements:
+                      parsedRequirements,
+                    evidence:
+                      retrievedEvidence,
+                    previous_draft:
+                      initialDraft,
+                    critic_feedback:
+                      firstCritic.flags,
+                  },
+                ),
+              },
+            );
+
+          const revisedDraft =
+            revisionData.draft ??
+            "";
+
+          setDraftText(
+            revisedDraft,
+          );
+
+          addLine(
+            "✓ [Agent 3 • Proposal Drafter] Revision complete.",
+            "success",
+          );
+
+          // ----------------------------------------------------
+          // RE-CRITIC
+          // ----------------------------------------------------
+
+          setActiveNode(3);
+
+          addLine(
+            "✦ [Agent 4 • Adversarial Critic] Re-auditing revised proposal...",
+          );
+
+          finalCritic =
+            await fetchJson<CriticResponse>(
+              `${API_BASE_URL}/api/4-critic-review`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+                body: JSON.stringify(
+                  {
+                    requirements:
+                      parsedRequirements,
+                    evidence:
+                      retrievedEvidence,
+                    draft: revisedDraft,
+                  },
+                ),
+              },
+            );
+
+          setScore(
+            finalCritic.compliance_score ??
+              0,
+          );
+
+          addLine(
+            `✓ [Agent 4 • Adversarial Critic] Final compliance score: ${finalCritic.compliance_score}/100.`,
+            "success",
+          );
+        } else {
+          addLine(
+            "✓ [Agent 4 • Adversarial Critic] No mandatory compliance risks found.",
+            "success",
+          );
+        }
+
+        setCriticFlags(
+          finalCritic.flags ??
+            [],
+        );
+
+        const finalScore =
           finalCritic.compliance_score ??
-            0,
+          0;
+
+        const finalImprovement =
+          finalScore -
+          firstScore;
+
+        if (
+          finalImprovement >
+          0
+        ) {
+          addLine(
+            `✓ [System] Swarm complete. Score improved by +${finalImprovement} points.`,
+            "success",
+          );
+        } else {
+          addLine(
+            `✓ [System] Swarm complete. Final score: ${finalScore}/100.`,
+            "success",
+          );
+        }
+
+        if (
+          finalCritic.flags
+            ?.length
+        ) {
+          addLine(
+            `⚠ [System] ${finalCritic.flags.length} issue${
+              finalCritic.flags.length ===
+              1
+                ? ""
+                : "s"
+            } remain. Human review required.`,
+            "warning",
+          );
+        } else {
+          addLine(
+            "✓ [System] Automated audit passed. Human sign-off required before export.",
+            "success",
+          );
+        }
+
+        setActiveNode(4);
+        setActiveTab(
+          "proposal",
+        );
+      } catch (error) {
+        console.error(
+          "Agent Swarm Failed:",
+          error,
         );
 
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unexpected pipeline error.";
+
         addLine(
-          `✓ [Agent 4 • Adversarial Critic] Final compliance score: ${finalCritic.compliance_score}/100.`,
-          "success",
+          `✕ [ERROR] ${message}`,
+          "error",
         );
-      } else {
-        addLine(
-          "✓ [Agent 4 • Adversarial Critic] No mandatory compliance risks found.",
-          "success",
-        );
+      } finally {
+        setRunning(false);
       }
+    };
 
-      setCriticFlags(
-        finalCritic.flags || [],
-      );
-
-      const finalScore =
-        finalCritic.compliance_score ??
-        0;
-
-      const improvement =
-        finalScore -
-        firstScore;
-
-      if (improvement > 0) {
-        addLine(
-          `✓ [System] Swarm complete. Score improved by +${improvement} points.`,
-          "success",
-        );
-      } else {
-        addLine(
-          `✓ [System] Swarm complete. Final score: ${finalScore}/100.`,
-          "success",
-        );
-      }
-
-      if (
-        finalCritic.flags?.length
-      ) {
-        addLine(
-          `⚠ [System] ${finalCritic.flags.length} issue${
-            finalCritic.flags.length ===
-            1
-              ? ""
-              : "s"
-          } remain. Human review required.`,
-          "warning",
-        );
-      } else {
-        addLine(
-          "✓ [System] Automated audit passed. Human sign-off required before export.",
-          "success",
-        );
-      }
-
-      setActiveNode(4);
-      setActiveTab(
-        "proposal",
-      );
-    } catch (error) {
-      console.error(
-        "Agent Swarm Failed:",
-        error,
-      );
-
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unexpected pipeline error.";
-
-      addLine(
-        `✕ [ERROR] ${message}`,
-        "error",
-      );
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  // ============================================================
+  // ==========================================================
   // PDF EXPORT
-  // ============================================================
+  // ==========================================================
 
   const exportProposal = () => {
     if (
@@ -747,22 +842,20 @@ export function Dashboard({
       text: string,
       fontSize = 10,
       lineHeight = 15,
-      indent = 0,
     ) => {
       doc.setFontSize(
         fontSize,
       );
 
-      const lines =
+      const wrapped =
         doc.splitTextToSize(
           text,
           pageWidth -
-            margin * 2 -
-            indent,
-        );
+            margin * 2,
+        ) as string[];
 
       for (
-        const line of lines
+        const line of wrapped
       ) {
         ensureSpace(
           lineHeight,
@@ -770,7 +863,7 @@ export function Dashboard({
 
         doc.text(
           line,
-          margin + indent,
+          margin,
           y,
         );
 
@@ -1121,7 +1214,7 @@ export function Dashboard({
             pageWidth -
               margin * 2 -
               24,
-          );
+          ) as string[];
 
         doc.text(
           issueLines.slice(
@@ -1138,7 +1231,7 @@ export function Dashboard({
             pageWidth -
               margin * 2 -
               24,
-          );
+          ) as string[];
 
         doc.setTextColor(
           ...muted,
@@ -1159,7 +1252,7 @@ export function Dashboard({
     }
 
     // ========================================================
-    // PROPOSAL BODY
+    // PROPOSAL
     // ========================================================
 
     ensureSpace(
@@ -1234,6 +1327,7 @@ export function Dashboard({
         flushTable(
           tableBuffer,
         );
+
         tableBuffer = [];
       }
 
@@ -1258,10 +1352,6 @@ export function Dashboard({
         doc.setFont(
           "helvetica",
           "bold",
-        );
-
-        doc.setFontSize(
-          11,
         );
 
         writeWrapped(
@@ -1294,10 +1384,6 @@ export function Dashboard({
           "bold",
         );
 
-        doc.setFontSize(
-          13,
-        );
-
         writeWrapped(
           trimmed.slice(
             3,
@@ -1326,10 +1412,6 @@ export function Dashboard({
         doc.setFont(
           "helvetica",
           "bold",
-        );
-
-        doc.setFontSize(
-          17,
         );
 
         writeWrapped(
@@ -1413,16 +1495,10 @@ export function Dashboard({
     );
   };
 
-  const improvement =
-    initialScore !== null
-      ? score -
-        initialScore
-      : 0;
-
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       {/* ======================================================
-          LOCAL SCROLLBAR STYLES
+          SCROLLBAR + PROPOSAL STYLES
       ====================================================== */}
 
       <style>
@@ -1463,7 +1539,6 @@ export function Dashboard({
 
           .bidbot-activity-scroll::-webkit-scrollbar {
             width: 9px;
-            height: 9px;
           }
 
           .bidbot-activity-scroll::-webkit-scrollbar-track {
@@ -1538,13 +1613,6 @@ export function Dashboard({
           .proposal-content strong {
             font-weight: 650;
             color: hsl(var(--foreground));
-          }
-
-          .proposal-content blockquote {
-            margin: 1.25rem 0;
-            border-left: 2px solid hsl(var(--border));
-            padding-left: 1rem;
-            color: hsl(var(--muted-foreground));
           }
 
           .proposal-content table {
@@ -1675,7 +1743,7 @@ export function Dashboard({
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[360px_minmax(0,1fr)]">
         {/* ====================================================
-            LEFT SIDEBAR
+            SIDEBAR
         ==================================================== */}
 
         <aside className="flex min-h-0 flex-col border-r border-border bg-background">
@@ -1790,7 +1858,7 @@ export function Dashboard({
               )}
             </div>
 
-            {/* Agent Pipeline */}
+            {/* Agents */}
 
             <div className="border-b border-border p-5">
               <div className="mb-4 flex items-center justify-between">
@@ -1882,7 +1950,7 @@ export function Dashboard({
               </div>
             </div>
 
-            {/* Evidence */}
+            {/* Evidence KB */}
 
             <div className="border-b border-border p-5">
               <div className="flex items-center gap-2">
@@ -1904,13 +1972,16 @@ export function Dashboard({
               {evidence.length >
                 0 && (
                 <p className="mt-3 text-xs text-accent">
-                  {evidence.length} retrieved for this RFP
+                  {
+                    evidence.length
+                  }{" "}
+                  retrieved for this RFP
                 </p>
               )}
             </div>
           </div>
 
-          {/* Left Bottom Controls */}
+          {/* Sidebar controls */}
 
           <div className="shrink-0 border-t border-border bg-background p-5">
             <button
@@ -2007,33 +2078,31 @@ export function Dashboard({
               )}
             </div>
 
-            <div className="shrink-0">
-              {activeTab ===
-                "proposal" &&
-                draftText && (
-                <button
-                  disabled={
-                    !approved
-                  }
-                  onClick={
-                    exportProposal
-                  }
-                  className="inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium transition hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-35"
-                  title={
-                    approved
-                      ? "Export proposal"
-                      : "Human sign-off required before export"
-                  }
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Export PDF
-                </button>
-              )}
-            </div>
+            {activeTab ===
+              "proposal" &&
+              draftText && (
+              <button
+                disabled={
+                  !approved
+                }
+                onClick={
+                  exportProposal
+                }
+                className="inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium transition hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-35"
+                title={
+                  approved
+                    ? "Export proposal"
+                    : "Human sign-off required before export"
+                }
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export PDF
+              </button>
+            )}
           </div>
 
           {/* ==================================================
-              PROPOSAL
+              PROPOSAL TAB
           ================================================== */}
 
           {activeTab ===
@@ -2057,111 +2126,277 @@ export function Dashboard({
                     </div>
                   </div>
                 ) : (
-                  <article className="rounded-xl border border-border bg-card/40 shadow-sm">
-                    {/* Proposal Header */}
+                  <>
+                    {/* ==================================================
+                        FINAL SWARM SUMMARY
+                    ================================================== */}
 
-                    <div className="border-b border-border px-7 py-7 lg:px-9">
-                      <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
-                            Proposal Response
-                          </p>
-
-                          <h1 className="mt-2 text-2xl font-semibold tracking-tight lg:text-3xl">
-                            {
-                              projectTitle ||
-                              "RFP Proposal"
-                            }
-                          </h1>
-
-                          <p className="mt-2 text-sm text-muted-foreground">
-                            Evidence-backed submission generated by the BidBot agent swarm.
-                          </p>
-                        </div>
-
-                        <div className="shrink-0 rounded-lg border border-border bg-background px-4 py-3 sm:min-w-[112px] sm:text-right">
-                          <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-muted-foreground">
-                            Compliance
-                          </p>
-
-                          <p className="mt-1 text-2xl font-semibold">
-                            {score}
-                            <span className="text-sm text-muted-foreground">
-                              /100
-                            </span>
-                          </p>
-
-                          {improvement >
-                            0 && (
-                            <p className="mt-1 font-mono text-[10px] text-accent">
-                              +{improvement} after revision
+                    {swarmComplete && (
+                      <section className="mb-6">
+                        <div className="mb-3 flex items-end justify-between gap-4">
+                          <div>
+                            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
+                              Swarm complete
                             </p>
+
+                            <h2 className="mt-1 text-lg font-semibold">
+                              Final review summary
+                            </h2>
+                          </div>
+
+                          {needsReviewCount >
+                            0 && (
+                            <button
+                              onClick={() =>
+                                setActiveTab(
+                                  "compliance",
+                                )
+                              }
+                              className="font-mono text-[10px] uppercase tracking-[0.16em] text-yellow-400 hover:underline"
+                            >
+                              Review remaining issue
+                              {needsReviewCount ===
+                              1
+                                ? ""
+                                : "s"}
+                              →
+                            </button>
                           )}
                         </div>
+
+                        <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 xl:grid-cols-5">
+                          <div className="bg-card p-4">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                              Final score
+                            </p>
+
+                            <p className="mt-2 text-2xl font-semibold">
+                              {score}
+                              <span className="text-sm text-muted-foreground">
+                                /100
+                              </span>
+                            </p>
+                          </div>
+
+                          <div className="bg-card p-4">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                              Mandatory clauses
+                            </p>
+
+                            <p className="mt-2 text-2xl font-semibold">
+                              {mandatoryCount}
+                            </p>
+                          </div>
+
+                          <div className="bg-card p-4">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                              Satisfied
+                            </p>
+
+                            <p className="mt-2 text-2xl font-semibold text-accent">
+                              {satisfiedCount}
+                            </p>
+                          </div>
+
+                          <div className="bg-card p-4">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                              Needs review
+                            </p>
+
+                            <p
+                              className={[
+                                "mt-2 text-2xl font-semibold",
+                                needsReviewCount >
+                                0
+                                  ? "text-yellow-400"
+                                  : "text-accent",
+                              ].join(
+                                " ",
+                              )}
+                            >
+                              {
+                                needsReviewCount
+                              }
+                            </p>
+                          </div>
+
+                          <div className="bg-card p-4">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+                              Evidence records
+                            </p>
+
+                            <p className="mt-2 text-2xl font-semibold">
+                              {
+                                evidence.length
+                              }
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Remaining issue */}
+
+                        {needsReviewCount >
+                          0 && (
+                          <div className="mt-3 flex flex-col gap-4 rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-5 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="flex min-w-0 gap-3">
+                              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-yellow-400" />
+
+                              <div className="min-w-0">
+                                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-yellow-400">
+                                  Action required
+                                </p>
+
+                                <p className="mt-1 text-sm font-medium">
+                                  {
+                                    criticFlags[0]
+                                      ?.clause_id
+                                  }{" "}
+                                  still needs review
+                                </p>
+
+                                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                                  {
+                                    criticFlags[0]
+                                      ?.issue
+                                  }
+                                </p>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() =>
+                                setActiveTab(
+                                  "compliance",
+                                )
+                              }
+                              className="shrink-0 rounded border border-yellow-500/20 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-yellow-400 transition hover:bg-yellow-500/10"
+                            >
+                              Open compliance review
+                            </button>
+                          </div>
+                        )}
+
+                        {needsReviewCount ===
+                          0 && (
+                          <div className="mt-3 flex items-center gap-3 rounded-lg border border-accent/20 bg-accent/5 p-4">
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-accent" />
+
+                            <div>
+                              <p className="text-sm font-medium">
+                                All mandatory clauses passed the automated audit.
+                              </p>
+
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Human sign-off is still required before PDF export.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </section>
+                    )}
+
+                    {/* ==================================================
+                        PROPOSAL CARD
+                    ================================================== */}
+
+                    <article className="rounded-xl border border-border bg-card/40 shadow-sm">
+                      <div className="border-b border-border px-7 py-7 lg:px-9">
+                        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
+                              Proposal Response
+                            </p>
+
+                            <h1 className="mt-2 text-2xl font-semibold tracking-tight lg:text-3xl">
+                              {projectTitle ||
+                                "RFP Proposal"}
+                            </h1>
+
+                            <p className="mt-2 text-sm text-muted-foreground">
+                              Evidence-backed submission generated through the BidBot agent swarm.
+                            </p>
+                          </div>
+
+                          <div className="shrink-0 rounded-lg border border-border bg-background px-4 py-3 sm:min-w-[112px] sm:text-right">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-muted-foreground">
+                              Compliance
+                            </p>
+
+                            <p className="mt-1 text-2xl font-semibold">
+                              {score}
+                              <span className="text-sm text-muted-foreground">
+                                /100
+                              </span>
+                            </p>
+
+                            {improvement >
+                              0 && (
+                              <p className="mt-1 font-mono text-[10px] text-accent">
+                                +{improvement} after revision
+                              </p>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Proposal Content */}
-
-                    <div className="px-7 py-8 lg:px-9 lg:py-10">
-                      <div className="proposal-content max-w-none text-foreground">
-                        <ReactMarkdown
-                          remarkPlugins={[
-                            remarkGfm,
-                          ]}
-                          components={{
-                            a: ({
-                              children,
-                              ...props
-                            }) => (
-                              <a
-                                {...props}
-                                className="text-accent underline underline-offset-2"
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {
-                                  children
-                                }
-                              </a>
-                            ),
-                          }}
-                        >
-                          {
-                            draftText
-                          }
-                        </ReactMarkdown>
+                      <div className="px-7 py-8 lg:px-9 lg:py-10">
+                        <div className="proposal-content max-w-none text-foreground">
+                          <ReactMarkdown
+                            remarkPlugins={[
+                              remarkGfm,
+                            ]}
+                            components={{
+                              a: ({
+                                children,
+                                ...props
+                              }) => (
+                                <a
+                                  {...props}
+                                  className="text-accent underline underline-offset-2"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {
+                                    children
+                                  }
+                                </a>
+                              ),
+                            }}
+                          >
+                            {
+                              draftText
+                            }
+                          </ReactMarkdown>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Proposal Footer */}
+                      <div className="border-t border-border px-7 py-4 lg:px-9">
+                        <div className="flex flex-col gap-2 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                          <span className="font-mono uppercase tracking-widest">
+                            Generated by BidBot
+                          </span>
 
-                    <div className="border-t border-border px-7 py-4 lg:px-9">
-                      <div className="flex flex-col gap-2 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-                        <span className="font-mono uppercase tracking-widest">
-                          Generated by BidBot
-                        </span>
-
-                        <span>
-                          Human sign-off required before export
-                        </span>
+                          <span>
+                            Human sign-off required before export
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  </article>
+                    </article>
+                  </>
                 )}
               </div>
             </div>
           )}
 
           {/* ==================================================
-              COMPLIANCE
+              COMPLIANCE TAB
           ================================================== */}
 
           {activeTab ===
             "compliance" && (
             <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
               <div className="mx-auto max-w-5xl p-6 lg:p-10">
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-4">
                   <div className="rounded-lg border border-border bg-card p-5">
                     <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                       Final Score
@@ -2203,6 +2438,28 @@ export function Dashboard({
                         : "—"}
                     </p>
                   </div>
+
+                  <div className="rounded-lg border border-border bg-card p-5">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                      Needs Review
+                    </p>
+
+                    <p
+                      className={[
+                        "mt-2 text-3xl font-semibold",
+                        needsReviewCount >
+                        0
+                          ? "text-yellow-400"
+                          : "text-accent",
+                      ].join(
+                        " ",
+                      )}
+                    >
+                      {
+                        needsReviewCount
+                      }
+                    </p>
+                  </div>
                 </div>
 
                 <section className="mt-8">
@@ -2219,12 +2476,7 @@ export function Dashboard({
 
                     <div className="shrink-0 font-mono text-[11px] text-muted-foreground">
                       {
-                        requirements.filter(
-                          (
-                            requirement,
-                          ) =>
-                            requirement.is_mandatory,
-                        ).length
+                        mandatoryCount
                       }{" "}
                       mandatory clauses
                     </div>
@@ -2323,14 +2575,16 @@ export function Dashboard({
                         },
                       )}
 
-                    {requirements.length ===
+                    {mandatoryCount ===
                       0 && (
                       <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-                        No parsed requirements yet.
+                        No mandatory requirements were parsed.
                       </div>
                     )}
                   </div>
                 </section>
+
+                {/* Findings */}
 
                 <section className="mt-8">
                   <div className="mb-4">
@@ -2412,7 +2666,7 @@ export function Dashboard({
           )}
 
           {/* ==================================================
-              EVIDENCE
+              EVIDENCE TAB
           ================================================== */}
 
           {activeTab ===
