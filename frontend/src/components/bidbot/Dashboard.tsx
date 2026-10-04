@@ -181,6 +181,16 @@ export function Dashboard({
   ] = useState("");
 
   const [
+    displayedDraftText,
+    setDisplayedDraftText,
+  ] = useState("");
+
+  const [
+    draftingStage,
+    setDraftingStage,
+  ] = useState<"idle" | "writing" | "complete">("idle");
+
+  const [
     criticFlags,
     setCriticFlags,
   ] =
@@ -311,6 +321,8 @@ export function Dashboard({
     setScore(0);
     setInitialScore(null);
     setDraftText("");
+    setDisplayedDraftText("");
+    setDraftingStage("idle");
     setCriticFlags([]);
     setEvidence([]);
     setRequirements([]);
@@ -345,6 +357,59 @@ export function Dashboard({
   };
 
   // ==========================================================
+  // DRAFT ANIMATION
+  // ==========================================================
+
+  const animateDraft = async (
+    fullDraft: string,
+    label: "initial" | "revision",
+  ) => {
+    const draftLines = fullDraft.split("\n");
+
+    setDraftingStage("writing");
+    setDisplayedDraftText("");
+    setActiveTab("proposal");
+
+    addLine(
+      label === "revision"
+        ? "↻ [Agent 3 • Proposal Drafter] Writing revised proposal into workspace..."
+        : "✦ [Agent 3 • Proposal Drafter] Writing proposal into workspace...",
+    );
+
+    let visible = "";
+
+    for (let index = 0; index < draftLines.length; index += 1) {
+      const line = draftLines[index] ?? "";
+      visible += `${index === 0 ? "" : "\n"}${line}`;
+
+      setDisplayedDraftText(visible);
+
+      // Keep the writing motion fast enough for a demo while still
+      // making the proposal visibly appear line-by-line.
+      const delay =
+        line.startsWith("#")
+          ? 120
+          : line.trim() === ""
+            ? 45
+            : 34;
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, delay);
+      });
+    }
+
+    setDisplayedDraftText(fullDraft);
+    setDraftingStage("complete");
+
+    addLine(
+      label === "revision"
+        ? "✓ [Agent 3 • Proposal Drafter] Revised proposal written. Returning to critic."
+        : "✓ [Agent 3 • Proposal Drafter] Proposal written. Returning to critic.",
+      "success",
+    );
+  };
+
+  // ==========================================================
   // AGENT PIPELINE
   // ==========================================================
 
@@ -362,6 +427,8 @@ export function Dashboard({
       setScore(0);
       setInitialScore(null);
       setDraftText("");
+      setDisplayedDraftText("");
+      setDraftingStage("idle");
       setCriticFlags([]);
       setEvidence([]);
       setRequirements([]);
@@ -499,13 +566,13 @@ export function Dashboard({
           draftData.draft ??
           "";
 
-        setDraftText(
-          initialDraft,
-        );
+        setDraftText(initialDraft);
 
-        addLine(
-          "✓ [Agent 3 • Proposal Drafter] Initial proposal complete.",
-          "success",
+        // Let the judge watch Agent 3 write the proposal before
+        // handing control to Agent 4.
+        await animateDraft(
+          initialDraft,
+          "initial",
         );
 
         // ------------------------------------------------------
@@ -613,13 +680,13 @@ export function Dashboard({
             revisionData.draft ??
             "";
 
-          setDraftText(
-            revisedDraft,
-          );
+          setDraftText(revisedDraft);
 
-          addLine(
-            "✓ [Agent 3 • Proposal Drafter] Revision complete.",
-            "success",
+          // Animate the revision through the same visible writing
+          // channel so the judge can see the second agent pass.
+          await animateDraft(
+            revisedDraft,
+            "revision",
           );
 
           // ----------------------------------------------------
@@ -732,6 +799,7 @@ export function Dashboard({
             ? error.message
             : "Unexpected pipeline error.";
 
+        setDraftingStage("idle");
         addLine(
           `✕ [ERROR] ${message}`,
           "error",
@@ -2313,7 +2381,9 @@ export function Dashboard({
                             </h1>
 
                             <p className="mt-2 text-sm text-muted-foreground">
-                              Evidence-backed submission generated through the BidBot agent swarm.
+                              {draftingStage === "writing"
+                                ? "Agent 3 is writing the evidence-backed response into the workspace."
+                                : "Evidence-backed submission generated through the BidBot agent swarm."}
                             </p>
                           </div>
 
@@ -2364,9 +2434,36 @@ export function Dashboard({
                             }}
                           >
                             {
-                              draftText
+                              displayedDraftText
                             }
                           </ReactMarkdown>
+
+                          {draftingStage ===
+                            "writing" && (
+                            <motion.div
+                              initial={{
+                                opacity: 0,
+                              }}
+                              animate={{
+                                opacity: 1,
+                              }}
+                              className="mt-5 inline-flex items-center gap-2 rounded border border-accent/20 bg-accent/5 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-accent"
+                            >
+                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                              Agent 3 is writing
+                              <span className="animate-pulse">
+                                ▌
+                              </span>
+                            </motion.div>
+                          )}
+
+                          {draftingStage ===
+                            "complete" && (
+                            <div className="mt-5 inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-400">
+                              <Check className="h-3 w-3" />
+                              Draft written
+                            </div>
+                          )}
                         </div>
                       </div>
 
