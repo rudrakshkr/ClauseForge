@@ -1,15 +1,15 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Dashboard } from "@/components/bidbot/Dashboard";
+import { Dashboard } from "@/components/clauseforge/Dashboard";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
-      { title: "BidBot AI — Workspace" },
+      { title: "ClauseForge AI — Workspace" },
       {
         name: "description",
         content:
-          "BidBot RFP workspace for evidence-backed proposal generation and adversarial compliance review.",
+          "ClauseForge RFP workspace for evidence-backed proposal generation and adversarial compliance review.",
       },
     ],
   }),

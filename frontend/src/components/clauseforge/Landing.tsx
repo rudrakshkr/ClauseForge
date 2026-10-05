@@ -27,7 +27,7 @@ const bento = [
   {
     icon: FileCheck2,
     title: "Human-Gated Export",
-    body: "Risks remain visible until a human reviewer approves the final response. Only then does BidBot unlock the PDF export.",
+    body: "Risks remain visible until a human reviewer approves the final response. Only then does ClauseForge unlock the PDF export.",
     meta: "Human sign-off required",
   },
 ];
@@ -108,7 +108,7 @@ export function Landing({
       <nav className="relative z-10 border-b border-border">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <span className="text-2xl font-bold tracking-tighter text-foreground">
-            BidBot
+            ClauseForge
           </span>
 
           <Button
@@ -163,7 +163,7 @@ export function Landing({
             variants={entrance}
             className="mt-6 max-w-3xl text-xl leading-relaxed text-muted-foreground"
           >
-            BidBot turns a dense RFP into a structured,
+            ClauseForge turns a dense RFP into a structured,
             evidence-backed proposal, then sends the
             draft through an adversarial compliance pass
             before a human reviewer can export it.
@@ -192,7 +192,7 @@ export function Landing({
         <AgentTicker />
 
         {/* ====================================================
-            OLD WAY / BIDBOT
+            OLD WAY / CLAUSEFORGE
         ==================================================== */}
 
         <div className="mt-12 grid gap-px border border-border bg-border md:grid-cols-2">
@@ -210,7 +210,7 @@ export function Landing({
 
           <div className="bg-background p-8">
             <p className="font-mono text-xs uppercase tracking-widest text-accent">
-              BidBot
+              ClauseForge
             </p>
 
             <p className="mt-4 max-w-xl text-lg leading-relaxed text-foreground">
@@ -388,7 +388,7 @@ export function Landing({
             </h2>
 
             <p className="mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground">
-              BidBot keeps the evidence trace visible, exposes
+              ClauseForge keeps the evidence trace visible, exposes
               unresolved requirements, and keeps export locked
               until a human reviewer signs off.
             </p>

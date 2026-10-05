@@ -4,7 +4,7 @@ import {
   useAnimationControls,
   useReducedMotion,
 } from "framer-motion";
-import coinUrl from "@/assets/bidbot/coin.png";
+import coinUrl from "@/assets/clauseforge/coin.png";
 
 export type CoinOrigin = {
   x: number;

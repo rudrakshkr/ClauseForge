@@ -1,14 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { HistoryPage } from "@/components/bidbot/HistoryPage";
+import { HistoryPage } from "@/components/clauseforge/HistoryPage";
 
 export const Route = createFileRoute("/history")({
   head: () => ({
     meta: [
-      { title: "BidBot AI — Bid History" },
+      { title: "ClauseForge AI — Bid History" },
       {
         name: "description",
         content:
-          "Persistent BidBot archive of completed RFP proposals and compliance results.",
+          "Persistent ClauseForge archive of completed RFP proposals and compliance results.",
       },
     ],
   }),

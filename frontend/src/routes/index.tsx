@@ -1,23 +1,23 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
-import { Landing } from "@/components/bidbot/Landing";
+import { Landing } from "@/components/clauseforge/Landing";
 import {
   TransitionCoin,
   type CoinOrigin,
-} from "@/components/bidbot/TransitionCoin";
+} from "@/components/clauseforge/TransitionCoin";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "BidBot AI — Multi-Agent RFP Grant Writer" },
+      { title: "ClauseForge AI — Multi-Agent RFP Grant Writer" },
       {
         name: "description",
         content:
-          "BidBot uses a multi-agent swarm to ingest dense RFPs, retrieve verified evidence, and draft compliant proposals in minutes.",
+          "ClauseForge uses a multi-agent swarm to ingest dense RFPs, retrieve verified evidence, and draft compliant proposals in minutes.",
       },
       {
         property: "og:title",
-        content: "BidBot AI — Win Bids on Autopilot",
+        content: "ClauseForge AI — Win Bids on Autopilot",
       },
       {
         property: "og:description",

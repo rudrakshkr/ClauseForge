@@ -104,7 +104,7 @@ type DashboardView =
   | "workspace"
   | "history";
 
-const BID_HISTORY_KEY = "bidbot-active-bids";
+const BID_HISTORY_KEY = "clauseforge-active-bids";
 
 function getErrorMessage(
   data: unknown,
@@ -470,7 +470,7 @@ export function Dashboard({
 
   useEffect(() => {
     const pendingBidId = sessionStorage.getItem(
-      "bidbot-open-bid-id",
+      "clauseforge-open-bid-id",
     );
 
     if (!pendingBidId || bidHistory.length === 0) {
@@ -482,7 +482,7 @@ export function Dashboard({
     );
 
     sessionStorage.removeItem(
-      "bidbot-open-bid-id",
+      "clauseforge-open-bid-id",
     );
 
     if (bid) {
@@ -1141,7 +1141,7 @@ export function Dashboard({
       );
 
       doc.text(
-        `BidBot • ${
+        `ClauseForge • ${
           projectTitle ||
           "Proposal Response"
         }`,
@@ -1327,7 +1327,7 @@ export function Dashboard({
     );
 
     doc.text(
-      "BidBot",
+      "ClauseForge",
       margin,
       58,
     );
@@ -1825,7 +1825,7 @@ export function Dashboard({
     addFooter();
 
     doc.save(
-      "BidBot-Proposal.pdf",
+      "ClauseForge-Proposal.pdf",
     );
   };
 
@@ -1862,7 +1862,7 @@ export function Dashboard({
           </span>
         </header>
 
-        <main className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        <main className="clauseforge-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           <div className="mx-auto w-full max-w-6xl px-6 py-8 lg:px-10 lg:py-10">
             <div className="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
               <div>
@@ -2086,55 +2086,55 @@ export function Dashboard({
 
       <style>
         {`
-          .bidbot-scroll {
+          .clauseforge-scroll {
             scrollbar-width: auto;
             scrollbar-color: #454b54 #090a0c;
           }
 
-          .bidbot-scroll::-webkit-scrollbar {
+          .clauseforge-scroll::-webkit-scrollbar {
             width: 11px;
             height: 11px;
           }
 
-          .bidbot-scroll::-webkit-scrollbar-track {
+          .clauseforge-scroll::-webkit-scrollbar-track {
             background: #090a0c;
           }
 
-          .bidbot-scroll::-webkit-scrollbar-thumb {
+          .clauseforge-scroll::-webkit-scrollbar-thumb {
             background: #454b54;
             border: 3px solid #090a0c;
             border-radius: 999px;
             min-height: 42px;
           }
 
-          .bidbot-scroll::-webkit-scrollbar-thumb:hover {
+          .clauseforge-scroll::-webkit-scrollbar-thumb:hover {
             background: #626a75;
           }
 
-          .bidbot-scroll::-webkit-scrollbar-corner {
+          .clauseforge-scroll::-webkit-scrollbar-corner {
             background: #090a0c;
           }
 
-          .bidbot-activity-scroll {
+          .clauseforge-activity-scroll {
             scrollbar-width: auto;
             scrollbar-color: #3c434c #090a0c;
           }
 
-          .bidbot-activity-scroll::-webkit-scrollbar {
+          .clauseforge-activity-scroll::-webkit-scrollbar {
             width: 9px;
           }
 
-          .bidbot-activity-scroll::-webkit-scrollbar-track {
+          .clauseforge-activity-scroll::-webkit-scrollbar-track {
             background: #090a0c;
           }
 
-          .bidbot-activity-scroll::-webkit-scrollbar-thumb {
+          .clauseforge-activity-scroll::-webkit-scrollbar-thumb {
             background: #3c434c;
             border: 2px solid #090a0c;
             border-radius: 999px;
           }
 
-          .bidbot-activity-scroll::-webkit-scrollbar-thumb:hover {
+          .clauseforge-activity-scroll::-webkit-scrollbar-thumb:hover {
             background: #5c6570;
           }
 
@@ -2347,7 +2347,7 @@ export function Dashboard({
               <ShieldCheck className="h-4 w-4 text-accent" />
 
               <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-                BidBot Swarm
+                ClauseForge Swarm
               </span>
             </div>
 
@@ -2360,7 +2360,7 @@ export function Dashboard({
             </p>
           </div>
 
-          <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="clauseforge-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
             {/* Upload */}
 
             <div className="border-b border-border p-5">
@@ -2702,10 +2702,10 @@ export function Dashboard({
 
           {activeTab ===
             "proposal" && (
-            <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="clauseforge-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
               <div className="mx-auto w-full max-w-5xl px-7 py-9 lg:px-12 lg:py-12">
                 {!draftText ? (
-                  <div className="flex min-h-[470px] items-center justify-center">
+                  <div className="flex min-h-117.5 items-center justify-center">
                     <div className="max-w-md text-center">
                       <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-border bg-card">
                         <FileText className="h-6 w-6 text-muted-foreground" />
@@ -2910,11 +2910,11 @@ export function Dashboard({
                             <p className="mt-2 text-sm text-muted-foreground">
                               {draftingStage === "writing"
                                 ? "Agent 3 is writing the evidence-backed response into the workspace."
-                                : "Evidence-backed submission generated through the BidBot agent swarm."}
+                                : "Evidence-backed submission generated through the ClauseForge agent swarm."}
                             </p>
                           </div>
 
-                          <div className="shrink-0 rounded-lg border border-border bg-background px-4 py-3 sm:min-w-[112px] sm:text-right">
+                          <div className="shrink-0 rounded-lg border border-border bg-background px-4 py-3 sm:min-w-28 sm:text-right">
                             <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-muted-foreground">
                               Compliance
                             </p>
@@ -2997,7 +2997,7 @@ export function Dashboard({
                       <div className="border-t border-border px-7 py-4 lg:px-9">
                         <div className="flex flex-col gap-2 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                           <span className="font-mono uppercase tracking-widest">
-                            Generated by BidBot
+                            Generated by ClauseForge
                           </span>
 
                           <span>
@@ -3018,7 +3018,7 @@ export function Dashboard({
 
           {activeTab ===
             "compliance" && (
-            <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="clauseforge-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
               <div className="mx-auto max-w-5xl p-6 lg:p-10">
                 <div className="grid gap-4 md:grid-cols-4">
                   <div className="rounded-lg border border-border bg-card p-5">
@@ -3295,7 +3295,7 @@ export function Dashboard({
 
           {activeTab ===
             "evidence" && (
-            <div className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="clauseforge-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
               <div className="mx-auto max-w-5xl p-6 lg:p-10">
                 <div className="mb-7">
                   <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -3438,7 +3438,7 @@ export function Dashboard({
 
             <div
               ref={termRef}
-              className="bidbot-activity-scroll h-44 overflow-y-auto overflow-x-hidden px-5 py-3"
+              className="clauseforge-activity-scroll h-44 overflow-y-auto overflow-x-hidden px-5 py-3"
             >
               {lines.length ===
               0 ? (

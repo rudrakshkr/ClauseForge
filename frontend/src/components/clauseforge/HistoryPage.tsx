@@ -6,7 +6,7 @@ import {
   History as HistoryIcon,
   Trash2,
 } from "lucide-react";
-import { spring } from "@/components/bidbot/motion";
+import { spring } from "@/components/clauseforge/motion";
 import { useNavigate } from "@tanstack/react-router";
 
 type Requirement = {
@@ -46,8 +46,8 @@ type BidHistoryItem = {
   draftText: string;
 };
 
-const BID_HISTORY_KEY = "bidbot-active-bids";
-const OPEN_BID_KEY = "bidbot-open-bid-id";
+const BID_HISTORY_KEY = "clauseforge-active-bids";
+const OPEN_BID_KEY = "clauseforge-open-bid-id";
 
 function readHistory(): BidHistoryItem[] {
   try {
@@ -117,7 +117,7 @@ export function HistoryPage() {
         </span>
       </header>
 
-      <main className="bidbot-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+      <main className="clauseforge-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div className="mx-auto w-full max-w-6xl px-6 py-8 lg:px-10 lg:py-10">
           <div className="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>

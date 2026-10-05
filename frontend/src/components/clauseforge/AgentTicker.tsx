@@ -24,7 +24,7 @@ const activity = [
 export function AgentTicker() {
   return (
     <div
-      aria-label="BidBot agent pipeline"
+      aria-label="ClauseForge agent pipeline"
       className="agent-ticker mt-8 overflow-hidden border-y border-border py-3"
     >
       <div className="agent-ticker-track flex w-max font-mono text-[10px] uppercase tracking-[0.16em]">
