@@ -70,13 +70,14 @@ export function Landing({
   const entrance = {
     hidden: {
       opacity: 0,
-      y: reducedMotion ? 0 : 10,
+      y: reducedMotion ? 0 : 4,
     },
     visible: {
       opacity: 1,
       y: 0,
       transition: {
-        duration: reducedMotion ? 0 : 0.3,
+        duration: reducedMotion ? 0 : 0.45,
+        ease: [0.16, 1, 0.3, 1] as const,
       },
     },
   };
@@ -133,10 +134,8 @@ export function Landing({
           variants={{
             visible: {
               transition: {
-                staggerChildren:
-                  reducedMotion
-                    ? 0
-                    : 0.07,
+                delayChildren: reducedMotion ? 0 : 0.04,
+                staggerChildren: reducedMotion ? 0 : 0.08,
               },
             },
           }}
@@ -189,13 +188,26 @@ export function Landing({
           </motion.div>
         </motion.div>
 
-        <AgentTicker />
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={entrance}
+          transition={{ delay: reducedMotion ? 0 : 0.38 }}
+        >
+          <AgentTicker />
+        </motion.div>
 
         {/* ====================================================
             OLD WAY / CLAUSEFORGE
         ==================================================== */}
 
-        <div className="mt-12 grid gap-px border border-border bg-border md:grid-cols-2">
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={entrance}
+          transition={{ delay: reducedMotion ? 0 : 0.48 }}
+          className="mt-12 grid gap-px border border-border bg-border md:grid-cols-2"
+        >
           <div className="bg-background p-8">
             <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
               The old workflow
@@ -219,7 +231,7 @@ export function Landing({
               critic attacks the result before human approval.
             </p>
           </div>
-        </div>
+        </motion.div>
 
         {/* ====================================================
             FEATURES
