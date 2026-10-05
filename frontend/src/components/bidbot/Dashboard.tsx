@@ -160,8 +160,10 @@ async function fetchJson<T>(
 
 export function Dashboard({
   onBack,
+  onHistory,
 }: {
   onBack: () => void;
+  onHistory: () => void;
 }) {
   const [running, setRunning] =
     useState(false);
@@ -459,12 +461,34 @@ export function Dashboard({
       return;
     }
 
-    setDashboardView("history");
+    onHistory();
   };
 
   const backToWorkspace = () => {
     setDashboardView("workspace");
   };
+
+  useEffect(() => {
+    const pendingBidId = sessionStorage.getItem(
+      "bidbot-open-bid-id",
+    );
+
+    if (!pendingBidId || bidHistory.length === 0) {
+      return;
+    }
+
+    const bid = bidHistory.find(
+      (item) => item.id === pendingBidId,
+    );
+
+    sessionStorage.removeItem(
+      "bidbot-open-bid-id",
+    );
+
+    if (bid) {
+      openBidFromHistory(bid);
+    }
+  }, [bidHistory]);
 
   const mandatoryCount =
     requirements.filter(
