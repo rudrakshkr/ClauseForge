@@ -195,13 +195,59 @@ async function streamDraft(
 
   let buffer = "";
   let fullText = "";
+  let displayedText = "";
+
+  const sleep = (
+    ms: number,
+  ) =>
+    new Promise<void>(
+      (resolve) => {
+        window.setTimeout(
+          resolve,
+          ms,
+        );
+      },
+    );
+
+  const revealText = async (
+    incomingText: string,
+  ) => {
+    // Reveal in small pieces so the UI still
+    // looks progressively generated even when
+    // production bundles multiple SSE chunks.
+    const pieceSize = 24;
+    const delay = 18;
+
+    for (
+      let index = 0;
+      index < incomingText.length;
+      index += pieceSize
+    ) {
+      const piece =
+        incomingText.slice(
+          index,
+          index + pieceSize,
+        );
+
+      displayedText += piece;
+
+      onText(
+        displayedText,
+      );
+
+      await sleep(delay);
+    }
+  };
 
   while (true) {
-    const { value, done } =
-      await reader.read();
+    const {
+      value,
+      done,
+    } = await reader.read();
 
     buffer += decoder.decode(
-      value ?? new Uint8Array(),
+      value ??
+        new Uint8Array(),
       {
         stream: !done,
       },
@@ -209,9 +255,13 @@ async function streamDraft(
 
     while (true) {
       const separator =
-        buffer.indexOf("\n\n");
+        buffer.indexOf(
+          "\n\n",
+        );
 
-      if (separator === -1) {
+      if (
+        separator === -1
+      ) {
         break;
       }
 
@@ -244,7 +294,8 @@ async function streamDraft(
         dataLine.slice(6);
 
       if (
-        payload === "[DONE]"
+        payload ===
+        "[DONE]"
       ) {
         return fullText;
       }
@@ -256,7 +307,9 @@ async function streamDraft(
 
       try {
         parsed =
-          JSON.parse(payload);
+          JSON.parse(
+            payload,
+          );
       } catch {
         continue;
       }
@@ -276,7 +329,9 @@ async function streamDraft(
 
       fullText += text;
 
-      onText(fullText);
+      await revealText(
+        text,
+      );
     }
 
     if (done) {
@@ -284,6 +339,7 @@ async function streamDraft(
     }
   }
 
+  // Process any final buffered SSE event.
   if (buffer.trim()) {
     const dataLine =
       buffer
@@ -300,11 +356,14 @@ async function streamDraft(
         dataLine.slice(6);
 
       if (
-        payload !== "[DONE]"
+        payload !==
+        "[DONE]"
       ) {
         try {
           const parsed =
-            JSON.parse(payload);
+            JSON.parse(
+              payload,
+            );
 
           if (parsed.error) {
             throw new Error(
@@ -317,12 +376,15 @@ async function streamDraft(
 
           if (text) {
             fullText += text;
-            onText(fullText);
+
+            await revealText(
+              text,
+            );
           }
         } catch (error) {
           if (
-            error instanceof Error
-            && error.message !==
+            error instanceof Error &&
+            error.message !==
               "Unexpected end of JSON input"
           ) {
             throw error;
@@ -825,6 +887,31 @@ export function Dashboard({
           );
         },
       );
+
+    if (!completedDraft.trim()) {
+      if (
+        requestBody.previous_draft?.trim()
+      ) {
+        addLine(
+          "⚠ [Agent 3 • Proposal Drafter] Revision returned no content. Keeping previous draft.",
+          "warning",
+        );
+
+        setDisplayedDraftText(
+          requestBody.previous_draft,
+        );
+
+        setDraftingStage(
+          "complete",
+        );
+
+        return requestBody.previous_draft;
+      }
+
+      throw new Error(
+        "Proposal drafter returned an empty response.",
+      );
+    }
 
     setDisplayedDraftText(
       completedDraft,

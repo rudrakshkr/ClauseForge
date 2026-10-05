@@ -5,6 +5,7 @@ import {
   FileText,
   History as HistoryIcon,
   Trash2,
+  X
 } from "lucide-react";
 import { spring } from "@/components/clauseforge/motion";
 import { useNavigate } from "@tanstack/react-router";
@@ -67,6 +68,10 @@ function readHistory(): BidHistoryItem[] {
 export function HistoryPage() {
   const navigate = useNavigate();
   const [bidHistory, setBidHistory] = useState<BidHistoryItem[]>([]);
+  const [
+    deleteConfirmId,
+    setDeleteConfirmId,
+  ] = useState<string | null>(null);
 
   useEffect(() => {
     setBidHistory(readHistory());
@@ -78,10 +83,13 @@ export function HistoryPage() {
     );
 
     setBidHistory(updated);
+
     localStorage.setItem(
       BID_HISTORY_KEY,
       JSON.stringify(updated),
     );
+
+    setDeleteConfirmId(null);
   };
 
   const openBid = (bidId: string) => {
@@ -297,8 +305,10 @@ export function HistoryPage() {
                       <div className="flex shrink-0 items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => deleteBid(bid.id)}
-                          className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[10px] font-medium text-muted-foreground transition hover:border-red-400/30 hover:text-red-400"
+                          onClick={() =>
+                            setDeleteConfirmId(bid.id)
+                          }
+                          className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[10px] font-medium text-muted-foreground transition-colors hover:border-red-400/30 hover:bg-red-400/5 hover:text-red-400"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           Delete
@@ -321,6 +331,130 @@ export function HistoryPage() {
           )}
         </div>
       </main>
+
+      {deleteConfirmId && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm"
+          onClick={() =>
+            setDeleteConfirmId(null)
+          }
+        >
+          <motion.div
+            initial={{
+              opacity: 0,
+              y: 10,
+              scale: 0.98,
+            }}
+            animate={{
+              opacity: 1,
+              y: 0,
+              scale: 1,
+            }}
+            exit={{
+              opacity: 0,
+              y: 8,
+              scale: 0.98,
+            }}
+            transition={{
+              duration: 0.18,
+            }}
+            onClick={(event) =>
+              event.stopPropagation()
+            }
+            className="w-full max-w-md overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+          >
+            <div className="flex items-start justify-between border-b border-border px-6 py-5">
+              <div>
+                <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-red-400">
+                  Delete Saved Bid
+                </p>
+
+                <h2 className="mt-2 text-base font-semibold">
+                  Permanently remove this bid?
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setDeleteConfirmId(null)
+                }
+                aria-label="Close"
+                className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5">
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                This saved bid and its locally stored proposal,
+                evidence, compliance results, and history entry
+                will be permanently removed from this browser.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-background px-6 py-4">
+              <button
+                type="button"
+                onClick={() =>
+                  setDeleteConfirmId(null)
+                }
+                className="rounded border border-border px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  deleteBid(deleteConfirmId)
+                }
+                className="inline-flex items-center gap-2 rounded border border-red-400/25 bg-red-400/10 px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-red-400 transition-colors hover:bg-red-400/15"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete Bid
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
+      <style>
+        {`
+          .clauseforge-scroll {
+            scrollbar-width: auto;
+            scrollbar-color: #454b54 #090a0c;
+          }
+
+          .clauseforge-scroll::-webkit-scrollbar {
+            width: 11px;
+            height: 11px;
+          }
+
+          .clauseforge-scroll::-webkit-scrollbar-track {
+            background: #090a0c;
+          }
+
+          .clauseforge-scroll::-webkit-scrollbar-thumb {
+            background: #454b54;
+            border: 3px solid #090a0c;
+            border-radius: 999px;
+            min-height: 42px;
+          }
+
+          .clauseforge-scroll::-webkit-scrollbar-thumb:hover {
+            background: #626a75;
+          }
+
+          .clauseforge-scroll::-webkit-scrollbar-corner {
+            background: #090a0c;
+          }
+        `}
+      </style>
     </div>
   );
 }
