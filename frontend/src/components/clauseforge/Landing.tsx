@@ -116,7 +116,7 @@ export function Landing({
             variant="outline"
             disabled={launching}
             onClick={launch}
-            className="rounded border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
+            className="rounded border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
           >
             Enter Workspace
           </Button>
