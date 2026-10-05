@@ -158,6 +158,183 @@ async function fetchJson<T>(
   return data as T;
 }
 
+async function streamDraft(
+  url: string,
+  options: RequestInit,
+  onText: (text: string) => void,
+): Promise<string> {
+  const response = await fetch(
+    url,
+    options,
+  );
+
+  if (!response.ok) {
+    const data: unknown = await response
+      .json()
+      .catch(() => null);
+
+    throw new Error(
+      getErrorMessage(
+        data,
+        `Request failed with status ${response.status}`,
+      ),
+    );
+  }
+
+  if (!response.body) {
+    throw new Error(
+      "Draft stream is unavailable.",
+    );
+  }
+
+  const reader =
+    response.body.getReader();
+
+  const decoder =
+    new TextDecoder();
+
+  let buffer = "";
+  let fullText = "";
+
+  while (true) {
+    const { value, done } =
+      await reader.read();
+
+    buffer += decoder.decode(
+      value ?? new Uint8Array(),
+      {
+        stream: !done,
+      },
+    );
+
+    while (true) {
+      const separator =
+        buffer.indexOf("\n\n");
+
+      if (separator === -1) {
+        break;
+      }
+
+      const event =
+        buffer.slice(
+          0,
+          separator,
+        );
+
+      buffer =
+        buffer.slice(
+          separator + 2,
+        );
+
+      const dataLine =
+        event
+          .split("\n")
+          .find(
+            (line) =>
+              line.startsWith(
+                "data: ",
+              ),
+          );
+
+      if (!dataLine) {
+        continue;
+      }
+
+      const payload =
+        dataLine.slice(6);
+
+      if (
+        payload === "[DONE]"
+      ) {
+        return fullText;
+      }
+
+      let parsed: {
+        text?: string;
+        error?: string;
+      };
+
+      try {
+        parsed =
+          JSON.parse(payload);
+      } catch {
+        continue;
+      }
+
+      if (parsed.error) {
+        throw new Error(
+          parsed.error,
+        );
+      }
+
+      const text =
+        parsed.text ?? "";
+
+      if (!text) {
+        continue;
+      }
+
+      fullText += text;
+
+      onText(fullText);
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (buffer.trim()) {
+    const dataLine =
+      buffer
+        .split("\n")
+        .find(
+          (line) =>
+            line.startsWith(
+              "data: ",
+            ),
+        );
+
+    if (dataLine) {
+      const payload =
+        dataLine.slice(6);
+
+      if (
+        payload !== "[DONE]"
+      ) {
+        try {
+          const parsed =
+            JSON.parse(payload);
+
+          if (parsed.error) {
+            throw new Error(
+              parsed.error,
+            );
+          }
+
+          const text =
+            parsed.text ?? "";
+
+          if (text) {
+            fullText += text;
+            onText(fullText);
+          }
+        } catch (error) {
+          if (
+            error instanceof Error
+            && error.message !==
+              "Unexpected end of JSON input"
+          ) {
+            throw error;
+          }
+        }
+      }
+    }
+  }
+
+  return fullText;
+}
+
 export function Dashboard({
   onBack,
   onHistory,
@@ -604,53 +781,67 @@ export function Dashboard({
   // DRAFT ANIMATION
   // ==========================================================
 
-  const animateDraft = async (
-    fullDraft: string,
+  const streamProposal = async (
+    requestBody: {
+      requirements: Requirement[];
+      evidence: EvidenceRecord[];
+      previous_draft?: string;
+      critic_feedback?: CriticFlag[];
+    },
     label: "initial" | "revision",
   ) => {
-    const draftLines = fullDraft.split("\n");
-
-    setDraftingStage("writing");
-    setDisplayedDraftText("");
-    setActiveTab("proposal");
-
-    addLine(
-      label === "revision"
-        ? "↻ [Agent 3 • Proposal Drafter] Writing revised proposal into workspace..."
-        : "✦ [Agent 3 • Proposal Drafter] Writing proposal into workspace...",
+    setDraftingStage(
+      "writing",
     );
 
-    let visible = "";
+    setDisplayedDraftText("");
 
-    for (let index = 0; index < draftLines.length; index += 1) {
-      const line = draftLines[index] ?? "";
-      visible += `${index === 0 ? "" : "\n"}${line}`;
-
-      setDisplayedDraftText(visible);
-
-      // Keep the writing motion fast enough for a demo while still
-      // making the proposal visibly appear line-by-line.
-      const delay =
-        line.startsWith("#")
-          ? 120
-          : line.trim() === ""
-            ? 45
-            : 34;
-
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, delay);
-      });
-    }
-
-    setDisplayedDraftText(fullDraft);
-    setDraftingStage("complete");
+    setActiveTab(
+      "proposal",
+    );
 
     addLine(
       label === "revision"
-        ? "✓ [Agent 3 • Proposal Drafter] Revised proposal written. Returning to critic."
-        : "✓ [Agent 3 • Proposal Drafter] Proposal written. Returning to critic.",
+        ? "↻ [Agent 3 • Proposal Drafter] Streaming revised proposal..."
+        : "✦ [Agent 3 • Proposal Drafter] Streaming proposal...",
+    );
+
+    const completedDraft =
+      await streamDraft(
+        `${API_BASE_URL}/api/3-draft-proposal`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify(
+            requestBody,
+          ),
+        },
+        (partialText) => {
+          setDisplayedDraftText(
+            partialText,
+          );
+        },
+      );
+
+    setDisplayedDraftText(
+      completedDraft,
+    );
+
+    setDraftingStage(
+      "complete",
+    );
+
+    addLine(
+      label === "revision"
+        ? "✓ [Agent 3 • Proposal Drafter] Revised proposal streamed. Returning to critic."
+        : "✓ [Agent 3 • Proposal Drafter] Proposal streamed. Returning to critic.",
       "success",
     );
+
+    return completedDraft;
   };
 
   // ==========================================================
@@ -786,39 +977,19 @@ export function Dashboard({
           "✦ [Agent 3 • Proposal Drafter] Writing evidence-backed proposal...",
         );
 
-        const draftData =
-          await fetchJson<{
-            draft: string;
-          }>(
-            `${API_BASE_URL}/api/3-draft-proposal`,
+        const initialDraft =
+          await streamProposal(
             {
-              method: "POST",
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-              body: JSON.stringify(
-                {
-                  requirements:
-                    parsedRequirements,
-                  evidence:
-                    retrievedEvidence,
-                },
-              ),
+              requirements:
+                parsedRequirements,
+              evidence:
+                retrievedEvidence,
             },
+            "initial",
           );
 
-        const initialDraft =
-          draftData.draft ??
-          "";
-
-        setDraftText(initialDraft);
-
-        // Let the judge watch Agent 3 write the proposal before
-        // handing control to Agent 4.
-        await animateDraft(
+        setDraftText(
           initialDraft,
-          "initial",
         );
 
         // ------------------------------------------------------
@@ -899,46 +1070,26 @@ export function Dashboard({
             "✦ [Agent 3 • Proposal Drafter] Revising draft against critic findings...",
           );
 
-          const revisionData =
-            await fetchJson<{
-              draft: string;
-            }>(
-              `${API_BASE_URL}/api/3-draft-proposal`,
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type":
-                    "application/json",
-                },
-                body: JSON.stringify(
-                  {
-                    requirements:
-                      parsedRequirements,
-                    evidence:
-                      retrievedEvidence,
-                    previous_draft:
-                      initialDraft,
-                    critic_feedback:
-                      firstCritic.flags,
-                  },
-                ),
-              },
-            );
-
           const revisedDraft =
-            revisionData.draft ??
-            "";
+            await streamProposal(
+              {
+                requirements:
+                  parsedRequirements,
+                evidence:
+                  retrievedEvidence,
+                previous_draft:
+                  initialDraft,
+                critic_feedback:
+                  firstCritic.flags,
+              },
+              "revision",
+            );
 
           finalDraft =
             revisedDraft;
 
-          setDraftText(revisedDraft);
-
-          // Animate the revision through the same visible writing
-          // channel so the judge can see the second agent pass.
-          await animateDraft(
+          setDraftText(
             revisedDraft,
-            "revision",
           );
 
           // ----------------------------------------------------

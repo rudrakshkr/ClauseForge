@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
@@ -404,7 +405,9 @@ Rules:
   required, minimum, mandatory, eligibility, or compliance
   are typically mandatory.
 - Ignore ordinary background information.
-- Return JSON only.
+- Keep each requirement description concise.
+- Return all requirements in a single compact JSON object.
+- Do not add commentary or markdown.
 
 RFP EXCERPTS:
 {text}
@@ -426,7 +429,6 @@ Return exactly this structure:
     try:
         response = client.chat.completions.create(
             model="gpt-5-6-luna",
-            max_tokens=1200,
             messages=[
                 {
                     "role": "system",
@@ -462,10 +464,74 @@ Return exactly this structure:
                 ),
             )
 
-        parsed = ParserResponse(
-            **json.loads(
-                raw_content
+        cleaned_content = raw_content.strip()
+
+        # Remove accidental markdown fences.
+        if cleaned_content.startswith("```"):
+            cleaned_content = re.sub(
+                r"^```(?:json)?\s*",
+                "",
+                cleaned_content,
             )
+            cleaned_content = re.sub(
+                r"\s*```$",
+                "",
+                cleaned_content,
+            )
+
+        try:
+            raw = json.loads(cleaned_content)
+
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Parser returned invalid JSON: "
+                    f"{exc}. "
+                    f"Response preview: {repr(cleaned_content[:1000])}"
+                ),
+            )
+
+        requirements = raw.get(
+            "requirements",
+            [],
+        )
+
+        if not isinstance(requirements, list):
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Parser returned an invalid "
+                    "requirements list."
+                ),
+            )
+
+        for index, requirement in enumerate(
+            requirements,
+            start=1,
+        ):
+            if not isinstance(
+                requirement,
+                dict,
+            ):
+                continue
+
+            clause_id = requirement.get(
+                "clause_id"
+            )
+
+            if (
+                not isinstance(clause_id, str)
+                or not clause_id.strip()
+            ):
+                requirement["clause_id"] = (
+                    f"REQ-{index:02d}"
+                )
+
+        raw["requirements"] = requirements
+
+        parsed = ParserResponse(
+            **raw
         )
 
     except HTTPException:
@@ -518,7 +584,6 @@ async def retrieve_context(
 async def draft_proposal(
     request: DraftRequest,
 ):
-
     requirements_text = "\n".join(
         [
             (
@@ -531,17 +596,50 @@ async def draft_proposal(
         ]
     )
 
-    evidence_text = "\n".join(
-        [
-            (
-                f"[Evidence for {item.requirement_id}]\n"
-                f"Source: {item.title}\n"
-                f"Type: {item.source_type}\n"
-                f"Content: {item.content}"
+    # --------------------------------------------------------
+    # COMPACT EVIDENCE CONTEXT
+    # --------------------------------------------------------
+    # The retriever may return the same source for multiple
+    # requirements. Group those records so Agent 3 does not
+    # receive the same evidence repeatedly.
+
+    evidence_by_source: dict[str, dict] = {}
+
+    for item in request.evidence:
+        source_id = item.source_id or item.title
+
+        if source_id not in evidence_by_source:
+            evidence_by_source[source_id] = {
+                "title": item.title,
+                "source_type": item.source_type,
+                "content": item.content,
+                "requirements": [],
+            }
+
+        evidence_by_source[source_id][
+            "requirements"
+        ].append(item.requirement_id)
+
+    evidence_blocks: list[str] = []
+
+    for item in evidence_by_source.values():
+        requirement_ids = ", ".join(
+            dict.fromkeys(
+                item["requirements"]
             )
-            for item
-            in request.evidence
-        ]
+        )
+
+        evidence_blocks.append(
+            (
+                f"Evidence supports clauses: {requirement_ids}\n"
+                f"Source: {item['title']}\n"
+                f"Type: {item['source_type']}\n"
+                f"Content: {item['content']}"
+            )
+        )
+
+    evidence_text = "\n\n".join(
+        evidence_blocks
     )
 
     revision_context = ""
@@ -608,56 +706,83 @@ Rules:
 - Do not pretend missing information exists.
 - Avoid repeating the same evidence unnecessarily.
 - Produce a polished business proposal.
-- Target approximately 900–1400 words.
+- Target approximately 700–1000 words.
 - Use clear headings and a compliance-oriented structure.
+- Begin writing immediately.
 """
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-5-6-luna",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert enterprise "
-                        "RFP proposal writer."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-        )
-
-        draft = (
-            response
-            .choices[0]
-            .message
-            .content
-        )
-
-        if not draft:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "Drafting model returned "
-                    "an empty response."
-                ),
+    def generate_stream():
+        try:
+            response = client.chat.completions.create(
+                model="gpt-5-6-luna",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert enterprise "
+                            "RFP proposal writer. "
+                            "Write concise, professional "
+                            "evidence-backed proposals."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                stream=True,
             )
 
-        return {
-            "draft": draft
-        }
+            for chunk in response:
+                if (
+                    not chunk.choices
+                    or not chunk.choices[0].delta
+                ):
+                    continue
 
-    except HTTPException:
-        raise
+                text = (
+                    chunk.choices[0]
+                    .delta
+                    .content
+                )
 
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Drafting failed: {exc}",
-        )
+                if not text:
+                    continue
+
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "text": text
+                        }
+                    )
+                    + "\n\n"
+                )
+
+            yield "data: [DONE]\n\n"
+
+        except Exception as exc:
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "error": (
+                            f"Drafting failed: {exc}"
+                        )
+                    }
+                )
+                + "\n\n"
+            )
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ============================================================
@@ -717,6 +842,8 @@ Rules:
 - Keep "suggestion" under 25 words.
 - Return JSON only.
 - Do not include explanations outside the JSON.
+- For satisfied clauses, keep "issue" and "suggestion" empty.
+- Keep every check extremely concise so all clauses fit in the response.
 
 RFP REQUIREMENTS:
 {requirements_text}
